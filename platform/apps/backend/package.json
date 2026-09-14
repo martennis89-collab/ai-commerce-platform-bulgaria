@@ -16,11 +16,13 @@
     "test:m1": "npm run typecheck && npm run test:unit && npm run test:integration:http && npm run test:e2e && npm run test:baseline"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@medusajs/cli": "2.21.0",
     "@medusajs/framework": "2.21.0",
     "@medusajs/medusa": "2.21.0",
     "@platform/storefront-core": "*",
-    "@platform/storefront-schema": "*"
+    "@platform/storefront-schema": "*",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@medusajs/test-utils": "2.21.0",

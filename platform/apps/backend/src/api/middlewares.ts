@@ -20,6 +20,8 @@ export default defineMiddlewares({
       matcher: "/merchant*",
       middlewares: [authenticate("user", ["bearer"]), merchantExecutionContextMiddleware],
     },
+    // Merchant photo uploads are base64 JSON; allow the configured size plus encoding overhead.
+    { matcher: "/merchant/media", methods: ["POST"], bodyParser: { sizeLimit: "8mb" }, middlewares: [] },
     // Runs after Medusa's own GET /store/products query middlewares.
     { matcher: "/store/products", methods: ["GET"], middlewares: [tenantProductListFilter] },
   ],

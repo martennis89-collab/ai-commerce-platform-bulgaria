@@ -228,6 +228,9 @@ export const MERCHANT_ROLE_PERMISSIONS = {
     "shoppers:read",
     "storefront:read",
     "storefront:deploy",
+    "ai:generate",
+    "ai:read",
+    "media:write",
   ],
   staff: [
     "catalogue:read",
@@ -236,6 +239,7 @@ export const MERCHANT_ROLE_PERMISSIONS = {
     "inventory:read",
     "inventory:write",
     "storefront:read",
+    "ai:read",
   ],
 } as const
 

@@ -1,9 +1,72 @@
 # M2 — Durable parallel initial generation — STATE
 
 ## Status
-**BRIEF DRAFTED. Implementation NOT started.** Awaiting user approval of the brief and decisions D1–D8. Blockers B1–B3 are listed below.
+**APPROVED (2026-09-14). Implementing on `mission/m2-durable-generation`. Do not start M3.**
+
+## User-approved decisions
+- **D1.** Anthropic, behind a swappable provider layer.
+  - Model IDs are configurable through env vars.
+  - Verify exact current API model names from Anthropic's model docs before implementing.
+  - Intent: a Sonnet-tier model for generation, a Haiku-tier model for cheap extraction.
+- **D2.** Merchant-uploaded photos only. No AI-generated images in M2.
+- **D3.** Postgres-backed `AgentRun` / `AgentTask` / `PromptQueue` tables plus a worker in the same backend. No Redis or external queue.
+- **D4.** Existing-store flow only. The operator creates the store; the merchant logs in and starts generation.
+- **D5.** API plus a live status stream. No merchant admin UI page unless tests need one.
+- **D6.** Product drafts are Medusa draft products, tenant-owned, with provenance. Drafts must never appear on the storefront.
+- **D7.** Generate Bulgarian theme/settings plus a fixed home page: hero, product grid, about.
+- **D8.** Conservative, configurable limits for tokens, runtime, tool calls, and runs per store.
+- **B1.** Build and fully test with a deterministic fake model. A real Anthropic smoke test is required before M2 is accepted. Implementation is not blocked on the key being present today.
+
+## Working rules (user instruction)
+- **Project skills.** Use the Amboras skills in `.claude/skills` when relevant:
+  - `/amboras-milestone-operator` for milestone execution;
+  - `/durable-agent-review` for AI generation work;
+  - `/security-red-team` and `/tenant-isolation-review` for security and tenancy review;
+  - `/mission-gate-review` before merge or tag;
+  - `/bulgarian-commerce-copy` for merchant and storefront copy;
+  - `/amboras-impeccable-ui`, `/amboras-design-taste` and `/kowalski-design` for frontend work.
+- **Visual direction.** Preserve the current Amboras direction. No generic SaaS or generic ecommerce styling.
+- **Scope.** Do not start a future milestone unless explicitly approved.
 - Branch: `mission/m2-durable-generation` from `main` @ `e9e7d5e` (M1 merge, tagged `m1-accepted`). Local only.
 - **Recommended model:** `claude-opus-5`, reasoning `high` (MODEL_ROUTING). Reason: durable execution design, AI tool safety, tenancy and audit.
+
+## Verified before implementation (2026-09-14)
+- **Anthropic Models Overview** (`platform.claude.com/docs/en/about-claude/models/overview.md`):
+  - Sonnet tier: `claude-sonnet-5`. $2/$10 per MTok, adaptive thinking, 1M context.
+  - Haiku tier: `claude-haiku-4-5`, alias of `claude-haiku-4-5-20251001`. $1/$5 per MTok, extended thinking with no effort parameter, 200K context. **Retirement not sooner than 2026-10-15**, so keep the model ID configurable.
+- **`@anthropic-ai/sdk`** is at 0.125.0. Structured outputs use `messages.parse` + `zodOutputFormat`.
+- **Medusa Store API product routes** already filter `status: published`, so draft products are invisible natively, on top of M0 ownership.
+- **Other Medusa facts:** `@medusajs/file-local` is installed, and `PG_CONNECTION` (knex) is available for lease SQL.
+
+## Implementation plan (approved decisions applied)
+- **A. Foundations.**
+  - An `ai` module with `AgentRun`, `AgentTask` (lease owner/token/expiry, heartbeat, attempts, depends_on), `PromptQueue`, `AIAction` (unique idempotency key), `Generation` (provenance), `BusinessProfile` and `MediaAsset`.
+  - Tenancy owned types gain `media_file`.
+  - Deployment lease columns.
+  - Model provider abstraction: a deterministic `fake` provider and `anthropic` (env `AI_GENERATION_MODEL`, default `claude-sonnet-5`; `AI_EXTRACTION_MODEL`, default `claude-haiku-4-5`).
+  - Configurable limits (D8).
+  - `storefront-schema` v2 (theme tokens + home hero / product grid / about) and `storefront-core` 0.2.0, using the Amboras frontend skills and `bulgarian-commerce-copy`.
+- **B. Tools and media.**
+  - An audited executor on top of the M0 typed tool boundary: selector scan, strict schema, permission, max auto-risk, and an `AIAction` row keyed by idempotency key; tools resolve existing resources by that key.
+  - Tools: `business_profile.upsert`, `brand.propose`, `brand.apply_theme`, `catalogue.create_product_draft` (Medusa draft, claimed, provenance, prices only from merchant facts, never stock), `media.attach_product_image`, `storefront.update_config`, `storefront.request_preview_deployment`, `offers.propose`.
+  - Merchant photo upload: validated type/size/magic bytes, tenant-prefixed key, owned `MediaAsset`.
+- **C. Durable execution.**
+  - A worker with Postgres lease claims (`FOR UPDATE SKIP LOCKED`), heartbeats and fencing tokens.
+  - Task implementations: brand, catalogue, images, storefront, offers.
+  - Run state recomputation, cancel/pause/resume, retry, and follow-up PromptQueue processing in sequence.
+  - A durable deployment lane replaces the M1 in-process subscriber.
+- **D. Merchant API.** Start generation, run status, SSE status stream, follow-up prompts, retry task, cancel/pause/resume, media upload. New permissions.
+- **E. Tests.**
+  - Unit.
+  - Integration with the fake model: parallelism, failure isolation, retry, idempotency, cancel/pause, prompt injection, tenancy, drafts invisible, limits.
+  - A durability suite that kills and restarts a real `medusa exec` worker process.
+  - E2E preview rendering generated sections.
+  - An opt-in live Anthropic smoke test.
+  - M0/M1 regression.
+- **F. Close-out.**
+  - Docs: `docs/AI_EXECUTION.md`, TENANCY, STOREFRONT, ARCHITECTURE, and ADRs.
+  - Reviews with `durable-agent-review`, `tenant-isolation-review` and `security-red-team`.
+  - Commit, push, draft PR, independent review, `mission-gate-review`.
 
 ## Sources read
 - `PROJECT_INSTRUCTIONS.md`, `SCOPE_LEVEL_1/2/3_LOCKED.md`, `LEVEL_4_LOCKED.md`, `AUTONOMOUS_MISSION_PROTOCOL_LOCKED.md`, `MODEL_ROUTING.md`, `AMBORAS_BENCHMARK.md`, `DECISIONS.md`.
