@@ -1,6 +1,6 @@
 {
   "mission": "m1-storefront-project",
-  "status": "REVIEW_FIXES_APPLIED_PENDING_REPEAT_REVIEW",
+  "status": "ACCEPTED_PENDING_MERGE",
   "commands": {
     "packages": "npm run build:packages (platform/)",
     "typecheck": "npm run typecheck (platform/apps/backend)",
@@ -143,6 +143,15 @@
   "last_full_run": "2026-09-14",
   "independent_review": {
     "round_1": "MATERIAL_ISSUE at 3cad636: M1-R1 preview gateway had no runnable entry point (preview URLs were dead outside tests); minor N1-N5. Suites reproduced 119/56/4/6.",
-    "fixes": "startPreviewGateway + `npm run preview:gateway` (R1); organization rollback step and hostname uniqueness validation (N1); real-path containment in gateway (N2); newest ready deployment wins (N3); revoked publishable key stops preview (N4); generic merchant deployment error (N5)"
+    "fixes": "startPreviewGateway + `npm run preview:gateway` (R1); organization rollback step and hostname uniqueness validation (N1); real-path containment in gateway (N2); newest ready deployment wins (N3); revoked publishable key stops preview (N4); generic merchant deployment error (N5)",
+    "round_2": "ACCEPTED at 6ac1f68, no material issues. Reviewer reproduced unit 123/123, integration 61/61, e2e 4/4, baseline 6/6; ran npm run preview:gateway for real (loopback bind, per-host real builds, 404s, suspension live); forced failure at all 7 creation steps left zero rows; round-1 findings closed.",
+    "tracked_minor_notes": [
+      "N-a newest-ready ordering by ULID id is not monotonic within the same millisecond",
+      "N-b concurrent execution of the same deployment possible (documented non-atomic transition; M2)",
+      "N-c artifact_ref real path checked inside deploy root, not equal to builds/<deployment_id>/out",
+      "N-d gateway SIGINT/SIGTERM shutdown untested on Windows",
+      "N-e duplicate Host headers: first wins (requester-controlled, no gain)",
+      "N-f ::$DATA alternate stream serves the same file (no leak)"
+    ]
   }
 }

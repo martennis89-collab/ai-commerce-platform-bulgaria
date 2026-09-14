@@ -113,3 +113,6 @@ Permissions: `owner` has `storefront:read` and `storefront:deploy`; `staff` has 
 - **Config coverage.** Only the store name, locale, currency and theme preset exist in config. Pages, sections and theme tokens arrive with M2/M3.
 - **Harness environment.** The dev-only harness (`apps/storefront`) passes the developer's whole environment to `next dev`. Merchant builds always use the local provider's allow-list.
 - **No rate limits.** Nothing limits how many redeploys a merchant can request yet (M11).
+- **Millisecond ordering (review N-a).** "Newest ready deployment" uses Medusa ids, which are ULIDs and not monotonic within a single millisecond. Two redeploys of the same project in the same millisecond (the same tenant's own builds) may settle on either one. Order by `created_at` then id, or use a monotonic sequence, when durable runs land in M2.
+- **Artifact path check (review N-c).** The gateway requires an artifact's real path to lie inside the deploy root, not to equal `builds/<deployment_id>/out`. `artifact_ref` is written only by the server; tighten this before any user-influenced artifact paths exist (M3 source editing).
+- **Windows shutdown (review N-d).** Gateway shutdown on SIGINT/SIGTERM waits for keep-alive connections, and is untested on Windows.
