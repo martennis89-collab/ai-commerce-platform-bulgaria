@@ -1,6 +1,6 @@
 {
   "mission": "m2-durable-generation",
-  "status": "IMPLEMENTED_DETERMINISTIC_SUITES_PASS_AWAITING_LIVE_SMOKE_AND_GATE",
+  "status": "ALL_TESTS_PASS_AWAITING_INDEPENDENT_REVIEW_AND_GATE",
   "regression_gate": "M0 and M1 suites must stay green",
   "provider_policy": "Deterministic suites use the fake model provider; one opt-in live-provider smoke test runs only when credentials are supplied (B1). M2 acceptance requires it.",
   "evidence": {
@@ -30,6 +30,6 @@
     { "id": "M2-T12", "requirement": "Images per D2 decision: tenant-prefixed storage, type/size validation, cross-store file ids rejected (TENANCY §12 media invariant)", "status": "PASS", "evidence": "M2-T12 (key prefixed by environment, traversal filename ignored, media_file ownership, type/signature/base64/size/selector rejections, foreign media id 404, unauthenticated 401)" },
     { "id": "M2-T13", "requirement": "Run budgets (tokens/time/tool calls/concurrency) enforced per D8 defaults", "status": "PASS", "evidence": "M2-T13 (active run, daily runs, prompt size, model calls, tokens, tool calls per task, run deadline, follow-ups)" },
     { "id": "M2-T14", "requirement": "Preview deployments execute through the durable worker, replacing M1 in-process execution; M1 deployment isolation tests still pass", "status": "PASS", "evidence": "M2-T14 (request_key idempotency, live lease not stolen, expired lease recovered, stale token cannot settle, newest ready kept); m1-storefront-project.spec.ts and m1-preview-e2e.spec.ts green" },
-    { "id": "M2-T15", "requirement": "Opt-in live-provider smoke: a real model produces valid tool calls for a Bulgarian sample merchant end to end", "status": "NOT_RUN_REQUIRES_CREDENTIALS", "evidence": "integration-tests/live/m2-anthropic-smoke.spec.ts via `npm run test:ai:live` with ANTHROPIC_API_KEY set locally (never committed). Required before M2 acceptance." }
+    { "id": "M2-T15", "requirement": "Opt-in live-provider smoke: a real model produces valid tool calls for a Bulgarian sample merchant end to end", "status": "PASS", "evidence": "2026-09-14 `npm run test:ai:live` (ANTHROPIC_API_KEY from git-ignored backend .env): 1/1 passed in 24.5 s. Run completed; all AI actions succeeded with provider anthropic (claude-sonnet-5 generation, claude-haiku-4-5 extraction); 5 model calls, 5200 input / 1637 output tokens. 3 draft products (Липов мед 900 г at 14 EUR, Акациев мед 900 г at 16 EUR, Восъчни свещи with no price — merchant said price not set), all status draft, no stock. Config schema v2 with Bulgarian hero/about. Copy notes (not safety): descriptions repeat prices; about body repeats the merchant's 'price not yet set' note; applied theme equals the platform default (model palette vs contrast fallback not recorded)." }
   ]
 }

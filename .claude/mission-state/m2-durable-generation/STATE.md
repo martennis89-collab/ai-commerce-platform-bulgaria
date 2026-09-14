@@ -28,10 +28,19 @@
   - Baseline: 6/6.
   - E2E: 5/5, including M2-T11 with a real `next build`.
   - Per-test evidence is in TESTS.json.
+- **M2-T15 live Anthropic smoke: PASS** (2026-09-14, 1/1, 24.5 s).
+  - Real `claude-sonnet-5` / `claude-haiku-4-5` calls went through the audited tools: 5 model calls, about 6.8k tokens.
+  - Output: 3 drafts with merchant-stated prices only (14, 16, none), no stock, schema v2 Bulgarian home page.
+  - **Copy follow-ups (not safety, not changed, so the smoke evidence stays valid):**
+    - Product descriptions repeat prices.
+    - The about text repeats the merchant's "price not yet set" note.
+    - The applied theme equals the platform default. Record `theme_source` in the smoke output next time.
+  - **Credential hygiene.** The user pasted the key into a terminal command, so it is in terminal scrollback and on 2 PowerShell history lines. It is not in any tracked file. Advised the user to revoke and rotate it.
+- **Pushed** `mission/m2-durable-generation`; draft PR #3 into `main` opened (user-approved).
 - **Pending.**
-  - Push and open a draft PR (confirm with user).
-  - Independent review and mission-gate-review.
-  - **M2-T15 live Anthropic smoke** (needs the user's `ANTHROPIC_API_KEY`; required before acceptance).
+  - Independent review.
+  - mission-gate-review.
+  - Merge and tag only on user instruction.
 
 ## User-approved decisions
 - **D1.** Anthropic, behind a swappable provider layer.
