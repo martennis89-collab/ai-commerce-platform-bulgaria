@@ -63,7 +63,7 @@ export async function requestPreviewDeployment(
 }
 
 /** Atomically leases a runnable deployment (a specific one, or the oldest). */
-async function claimDeployment(container: MedusaContainer, workerId: string, deploymentId?: string) {
+export async function claimDeployment(container: MedusaContainer, workerId: string, deploymentId?: string) {
   const token = randomUUID()
   const rows = await sqlRows(
     container,
@@ -89,7 +89,8 @@ async function claimDeployment(container: MedusaContainer, workerId: string, dep
   return rows[0] ?? null
 }
 
-async function runLeasedDeployment(container: MedusaContainer, deployment: any) {
+/** Executes a claimed deployment; every write is fenced by the claim's lease token. */
+export async function runLeasedDeployment(container: MedusaContainer, deployment: any) {
   const token = deployment.lease_token
   try {
     const manifest = await buildDeploymentManifest(container, deployment.id)

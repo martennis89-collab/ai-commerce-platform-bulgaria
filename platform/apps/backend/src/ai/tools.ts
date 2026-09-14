@@ -14,7 +14,7 @@ import { z } from "zod"
 import { generateEntityId, MedusaError, Modules } from "@medusajs/framework/utils"
 import { createProductsWorkflow, updateProductsWorkflow } from "@medusajs/medusa/core-flows"
 import { STOREFRONT_CORE_VERSION } from "@platform/storefront-core"
-import { DEFAULT_THEME, parseStorefrontConfig } from "@platform/storefront-schema"
+import { DEFAULT_THEME, parseStorefrontConfig, StorefrontConfigError } from "@platform/storefront-schema"
 import { AI_MODULE } from "../modules/ai"
 import type AiModuleService from "../modules/ai/service"
 import { STOREFRONT_MODULE } from "../modules/storefront"
@@ -62,11 +62,12 @@ const ai = (rt: ToolRuntime): AiModuleService => rt.ctx.scope.container.resolve(
 const storefrontService = (rt: ToolRuntime): StorefrontModuleService => rt.ctx.scope.container.resolve(STOREFRONT_MODULE)
 
 async function findGeneration(rt: ToolRuntime, kind: string, idempotencyKey: string) {
-  const rows = (await ai(rt).listGenerations(
-    { run_id: rt.runId, kind: kind as any, store_environment_id: rt.ctx.scope.storeEnvironmentId },
-    { take: null }
-  )) as any[]
-  return rows.find((g) => g.payload?.idempotency_key === idempotencyKey) ?? null
+  const [row] = (await ai(rt).listGenerations({
+    idempotency_key: idempotencyKey,
+    kind: kind as any,
+    store_environment_id: rt.ctx.scope.storeEnvironmentId,
+  } as any)) as any[]
+  return row ?? null
 }
 
 async function activeProject(rt: ToolRuntime) {
@@ -144,6 +145,7 @@ const brandApply = defineAiTool({
     generation ??= await service.createGenerations({
       store_environment_id: env,
       run_id: rt.runId,
+      idempotency_key: key,
       task_id: rt.taskId,
       kind: "brand",
       status: "applied",
@@ -190,6 +192,7 @@ const createProductDraft = defineAiTool({
       generation = await service.createGenerations({
         store_environment_id: env,
         run_id: rt.runId,
+      idempotency_key: key,
         task_id: rt.taskId,
         kind: "product_draft",
         status: "proposed",
@@ -260,6 +263,7 @@ const attachProductImage = defineAiTool({
   input: z.strictObject({
     media_asset_id: z.string().regex(/^media_[0-9A-Z]{26}$/),
     product_id: z.string().regex(/^prod_[0-9A-Z]{26}$/),
+    pairing: z.enum(["position_inference", "merchant_specified"]),
   }),
   handler: async (rt, input, key) => {
     const container = rt.ctx.scope.container
@@ -291,11 +295,12 @@ const attachProductImage = defineAiTool({
       await ai(rt).createGenerations({
         store_environment_id: env,
         run_id: rt.runId,
+      idempotency_key: key,
         task_id: rt.taskId,
         kind: "image_attachment",
         status: "applied",
         payload: { idempotency_key: key, media_asset_id: asset.id, product_id: product.id },
-        provenance: { image: "merchant_upload" },
+        provenance: { image: "merchant_upload", pairing: input.pairing },
         resource_type: "product",
         resource_id: product.id,
       } as any)
@@ -333,6 +338,7 @@ const storefrontUpdateHome = defineAiTool({
     generation ??= await ai(rt).createGenerations({
       store_environment_id: rt.ctx.scope.storeEnvironmentId,
       run_id: rt.runId,
+      idempotency_key: key,
       task_id: rt.taskId,
       kind: "storefront_config",
       status: "applied",
@@ -368,6 +374,7 @@ const offersPropose = defineAiTool({
     generation ??= await ai(rt).createGenerations({
       store_environment_id: rt.ctx.scope.storeEnvironmentId,
       run_id: rt.runId,
+      idempotency_key: key,
       task_id: rt.taskId,
       kind: "offer_suggestion",
       status: "proposed",
@@ -505,6 +512,10 @@ export async function executeAiTool(
       `UPDATE ai_action SET status = 'failed', error = ?, finished_at = now(), updated_at = now() WHERE id = ?`,
       [String(error?.message ?? error).slice(0, 2000), actionId]
     )
+    if (error instanceof StorefrontConfigError) {
+      // Output that fails the storefront contract is a rejection, never worth retrying.
+      throw new ToolRejectedError("invalid_input", error.message)
+    }
     throw error
   }
 }

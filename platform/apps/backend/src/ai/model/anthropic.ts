@@ -6,6 +6,7 @@
 import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { aiModelConfig } from "../config"
+import { ModelRequestError } from "../errors"
 import type { ModelProvider, StructuredRequest, StructuredResult } from "./types"
 import { ModelOutputError, ModelTransientError } from "./types"
 
@@ -44,6 +45,10 @@ export class AnthropicModelProvider implements ModelProvider {
       if (!(error instanceof Anthropic.APIError)) {
         // The SDK's own structured-output parsing failed: invalid output, not worth retrying.
         throw new ModelOutputError("invalid_output", String((error as Error)?.message ?? error).slice(0, 500))
+      }
+      if (typeof error.status === "number" && error.status >= 400 && error.status < 500) {
+        // Bad request, authentication, permission, not found, too large: retrying cannot help.
+        throw new ModelRequestError(error.status, error.message)
       }
       throw error
     }

@@ -4,7 +4,8 @@
  * progress write, tool call and completion is conditional on that token, so a
  * worker that crashed, stalled or lost its lease can never overwrite newer
  * state. Expired leases are re-claimed by any worker; completed tool calls
- * replay from their AIAction rows instead of running twice.
+ * replay from their AIAction rows instead of running twice. Follow-up prompts
+ * are leased the same way.
  */
 import { randomUUID } from "crypto"
 import type { MedusaContainer } from "@medusajs/framework/types"
@@ -14,7 +15,7 @@ import { AI_MODULE } from "../modules/ai"
 import type AiModuleService from "../modules/ai/service"
 import { buildMerchantExecutionContext, ExecutionContext } from "../tenancy/context"
 import { AiLimits, aiLimits, aiWorkerConfig } from "./config"
-import { LeaseLostError, LimitReachedError, TaskAbortedError, ToolRejectedError } from "./errors"
+import { LeaseLostError, LimitReachedError, ModelRequestError, TaskAbortedError, ToolRejectedError } from "./errors"
 import { getModelProvider, ModelOutputError, ModelPurpose, ModelTransientError } from "./model"
 import { dataPrompt, systemPrompt } from "./prompts"
 import { FollowUpRouteSchema } from "./schemas"
@@ -44,6 +45,8 @@ export type TaskRuntime = {
 }
 
 const ai = (container: MedusaContainer): AiModuleService => container.resolve(AI_MODULE)
+
+const ACTIVE_FOLLOW_UP_DEPENDENCIES: Record<string, string[]> = { brand: [], storefront: ["brand"], offers: ["catalogue"] }
 
 /** Atomically claims the oldest runnable task whose dependencies are completed. */
 export async function claimNextTask(container: MedusaContainer, workerId: string) {
@@ -89,7 +92,8 @@ export async function claimNextTask(container: MedusaContainer, workerId: string
   }
   await sqlRows(
     container,
-    `UPDATE ai_run SET status = 'running', started_at = coalesce(started_at, now()), updated_at = now() WHERE id = ?`,
+    `UPDATE ai_run SET status = 'running', started_at = coalesce(started_at, now()), updated_at = now()
+      WHERE id = ? AND status NOT IN ('completed', 'failed', 'cancelled')`,
     [rows[0].run_id]
   )
   return rows[0]
@@ -108,13 +112,13 @@ async function heartbeat(container: MedusaContainer, taskId: string, token: stri
   return rows[0] ?? null
 }
 
-async function finishTask(
-  container: MedusaContainer,
-  task: any,
-  token: string,
-  outcome: { status: "completed"; result: Record<string, unknown> } | { status: "failed" | "queued" | "cancelled" | "paused"; error?: string }
-) {
+type TaskOutcome =
+  | { status: "completed"; result: Record<string, unknown> }
+  | { status: "failed" | "queued" | "cancelled" | "paused"; error?: string; refundAttempt?: boolean }
+
+async function finishTask(container: MedusaContainer, task: any, token: string, outcome: TaskOutcome) {
   const isCompleted = outcome.status === "completed"
+  const refundAttempt = outcome.status === "paused" || (outcome as any).refundAttempt === true
   const rows = await sqlRows(
     container,
     `UPDATE ai_task
@@ -124,8 +128,8 @@ async function finishTask(
             finished_at = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN now() ELSE NULL END,
             lease_token = NULL, lease_owner = NULL,
             lease_expires_at = CASE WHEN ? = 'queued' THEN now() + interval '500 milliseconds' ELSE NULL END,
-            -- A merchant pause is not a failed attempt.
-            attempt = CASE WHEN ? = 'paused' THEN greatest(attempt - 1, 0) ELSE attempt END,
+            -- A merchant pause (or a resume that raced it) is not a failed attempt.
+            attempt = CASE WHEN ? THEN greatest(attempt - 1, 0) ELSE attempt END,
             updated_at = now()
       WHERE id = ? AND lease_token = ?
       RETURNING id`,
@@ -138,7 +142,7 @@ async function finishTask(
       isCompleted, // $6 current_step
       outcome.status, // $7 finished_at
       outcome.status, // $8 lease_expires_at backoff
-      outcome.status, // $9 attempt (pause)
+      refundAttempt, // $9 attempt refund
       task.id, // $10
       token, // $11
     ]
@@ -148,6 +152,7 @@ async function finishTask(
 
 function classify(error: any): { retryable: boolean; code: string } {
   if (error instanceof ModelTransientError) return { retryable: true, code: "model_unavailable" }
+  if (error instanceof ModelRequestError) return { retryable: false, code: "model_unavailable" }
   if (error instanceof ModelOutputError) return { retryable: false, code: "model_output_rejected" }
   if (error instanceof ToolRejectedError) return { retryable: false, code: "policy_rejected" }
   if (error instanceof LimitReachedError) return { retryable: false, code: "limit_reached" }
@@ -168,15 +173,15 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
   const [run] = (await service.listAgentRuns({ id: task.run_id })) as any[]
   const { heartbeatMs } = aiWorkerConfig()
   const limits: AiLimits = { ...aiLimits(), ...(run?.limits ?? {}) }
-  let abort: TaskAbortedError | LeaseLostError | LimitReachedError | null = null
+  // Only irreversible signals are cached between checkpoints. Pause and deadline are
+  // re-read at every checkpoint, because a resume or a retry can clear them.
+  let abort: TaskAbortedError | LeaseLostError | null = null
 
   const timer = setInterval(async () => {
     try {
       const state = await heartbeat(container, task.id, token)
       if (!state) abort ??= new LeaseLostError()
       else if (state.cancel_requested_at) abort ??= new TaskAbortedError("cancelled")
-      else if (state.pause_requested_at) abort ??= new TaskAbortedError("paused")
-      else if (state.deadline_at && new Date(state.deadline_at) <= new Date()) abort ??= new LimitReachedError("run duration")
     } catch {
       // Transient DB errors: the lease simply expires if heartbeats keep failing.
     }
@@ -246,16 +251,7 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
           schema: request.schema,
         })
         lastModel = { provider: result.provider, model: result.model }
-        await sqlRows(
-          container,
-          `UPDATE ai_run
-              SET usage = jsonb_set(jsonb_set(coalesce(usage::jsonb, '{}'::jsonb),
-                    '{input_tokens}', to_jsonb(coalesce((usage::jsonb->>'input_tokens')::int, 0) + ?)),
-                    '{output_tokens}', to_jsonb(coalesce((usage::jsonb->>'output_tokens')::int, 0) + ?)),
-                  updated_at = now()
-            WHERE id = ?`,
-          [result.usage.input_tokens, result.usage.output_tokens, run.id]
-        )
+        await recordUsage(container, run.id, result.usage)
         return result.output
       },
       async tool(name, args, idempotencyKey) {
@@ -268,11 +264,10 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
         )
       },
       async dependencyResult(key) {
-        const [dep] = (await service.listAgentTasks({ run_id: run.id, task_key: key as any, status: "completed" }, { take: null })) as any[]
         const active = ((await service.listAgentTasks({ run_id: run.id, task_key: key as any }, { take: null })) as any[]).find(
           (t) => !t.superseded_by && t.status === "completed"
         )
-        return (active ?? dep)?.result ?? null
+        return active?.result ?? null
       },
       async productDraftTitles() {
         const drafts = (await service.listGenerations({ run_id: run.id, kind: "product_draft" }, { take: null })) as any[]
@@ -287,8 +282,12 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
   } catch (error: any) {
     if (error instanceof LeaseLostError) {
       // Someone else owns the task now; write nothing.
+    } else if (error instanceof TaskAbortedError && error.reason === "cancelled") {
+      await finishTask(container, task, token, { status: "cancelled" })
     } else if (error instanceof TaskAbortedError) {
-      await finishTask(container, task, token, { status: error.reason === "cancelled" ? "cancelled" : "paused" })
+      const [state] = await sqlRows(container, `SELECT pause_requested_at FROM ai_run WHERE id = ?`, [task.run_id])
+      // If the merchant already resumed, re-queue instead of stranding the task as paused.
+      await finishTask(container, task, token, state?.pause_requested_at ? { status: "paused" } : { status: "queued", refundAttempt: true })
     } else {
       const { retryable, code } = classify(error)
       const message = `${code}: ${String(error?.message ?? error).slice(0, 1500)}`
@@ -301,7 +300,25 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
   }
 }
 
-/** Fails tasks that exhausted attempts on expired leases, and runs past their deadline. */
+async function recordUsage(container: MedusaContainer, runId: string, usage: { input_tokens: number; output_tokens: number }) {
+  await sqlRows(
+    container,
+    `UPDATE ai_run
+        SET usage = jsonb_set(jsonb_set(coalesce(usage::jsonb, '{}'::jsonb),
+              '{input_tokens}', to_jsonb(coalesce((usage::jsonb->>'input_tokens')::int, 0) + ?)),
+              '{output_tokens}', to_jsonb(coalesce((usage::jsonb->>'output_tokens')::int, 0) + ?)),
+            updated_at = now()
+      WHERE id = ?`,
+    [usage.input_tokens, usage.output_tokens, runId]
+  )
+}
+
+/**
+ * Housekeeping on every worker tick:
+ * - fails tasks that exhausted attempts on expired leases, and non-paused runs past their deadline;
+ * - re-queues tasks left `paused` in runs that are no longer paused;
+ * - recomputes every active run, so a status written from a stale read heals itself.
+ */
 export async function sweepExpired(container: MedusaContainer) {
   const touched = await sqlRows(
     container,
@@ -317,10 +334,25 @@ export async function sweepExpired(container: MedusaContainer) {
        FROM ai_run r
       WHERE r.id = t.run_id AND t.deleted_at IS NULL AND r.deadline_at < now()
         AND r.status NOT IN ('completed', 'failed', 'cancelled')
+        AND r.pause_requested_at IS NULL
         AND (t.status IN ('queued', 'waiting') OR (t.status = 'running' AND t.lease_expires_at < now()))
       RETURNING t.run_id`
   )
-  for (const runId of new Set([...touched, ...expiredRuns].map((r) => r.run_id))) {
+  const healed = await sqlRows(
+    container,
+    `UPDATE ai_task t SET status = 'queued', updated_at = now()
+       FROM ai_run r
+      WHERE r.id = t.run_id AND t.deleted_at IS NULL AND t.status = 'paused'
+        AND r.pause_requested_at IS NULL AND r.cancel_requested_at IS NULL
+      RETURNING t.run_id`
+  )
+  const active = await sqlRows(
+    container,
+    `SELECT id AS run_id FROM ai_run
+      WHERE deleted_at IS NULL AND status NOT IN ('completed', 'failed', 'cancelled')
+      ORDER BY updated_at LIMIT 200`
+  )
+  for (const runId of new Set([...touched, ...expiredRuns, ...healed, ...active].map((r) => r.run_id))) {
     await recomputeRun(container, runId)
   }
 }
@@ -338,20 +370,31 @@ async function supersedePrevious(container: MedusaContainer, tasks: any[]) {
   }
 }
 
+async function tasksForPrompt(container: MedusaContainer, prompt: any) {
+  return ((await ai(container).listAgentTasks({ run_id: prompt.run_id }, { take: null })) as any[]).filter(
+    (t) => t.prompt_id === prompt.id
+  )
+}
+
 /**
  * Processes follow-up prompts strictly in order: the next prompt of a run is
  * handled only after every task created by the previous prompt is terminal.
+ * A prompt is leased (fencing token + heartbeat) while it is routed, so a slow
+ * model call is never processed twice, and a crashed worker's prompt is
+ * recovered after its lease expires. Tasks are unique per (prompt, key).
  */
 export async function processPromptQueues(container: MedusaContainer, workerId: string) {
+  const { leaseMs, heartbeatMs } = aiWorkerConfig()
   const claimed = await sqlRows(
     container,
-    `UPDATE ai_prompt_queue q SET status = 'processing', updated_at = now()
+    `UPDATE ai_prompt_queue q
+        SET status = 'processing', lease_token = gen_random_uuid()::text,
+            lease_expires_at = now() + (? * interval '1 millisecond'), updated_at = now()
       WHERE q.id IN (
         SELECT p.id FROM ai_prompt_queue p
           JOIN ai_run r ON r.id = p.run_id AND r.deleted_at IS NULL
          WHERE p.deleted_at IS NULL
-           -- A prompt left 'processing' by a crashed worker is recoverable after one lease period.
-           AND (p.status = 'queued' OR (p.status = 'processing' AND p.updated_at < now() - (? * interval '1 millisecond')))
+           AND (p.status = 'queued' OR (p.status = 'processing' AND (p.lease_expires_at IS NULL OR p.lease_expires_at < now())))
            AND r.cancel_requested_at IS NULL AND r.pause_requested_at IS NULL
            AND NOT EXISTS (SELECT 1 FROM ai_prompt_queue e WHERE e.run_id = p.run_id AND e.deleted_at IS NULL
                             AND e.sequence < p.sequence AND e.status IN ('queued', 'processing'))
@@ -362,33 +405,45 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
          LIMIT 5
       )
       RETURNING q.*`,
-    [aiWorkerConfig().leaseMs]
+    [leaseMs]
   )
   const service = ai(container)
   for (const prompt of claimed) {
+    const token: string = prompt.lease_token
+    const timer = setInterval(() => {
+      sqlRows(
+        container,
+        `UPDATE ai_prompt_queue SET lease_expires_at = now() + (? * interval '1 millisecond') WHERE id = ? AND lease_token = ?`,
+        [leaseMs, prompt.id, token]
+      ).catch(() => undefined)
+    }, heartbeatMs)
+    const settle = (status: "processed" | "queued" | "rejected", result: unknown, error: string | null) =>
+      sqlRows(
+        container,
+        `UPDATE ai_prompt_queue
+            SET status = ?, result = coalesce(?::jsonb, result), error = ?,
+                processed_at = CASE WHEN ? = 'processed' THEN coalesce(processed_at, now()) ELSE processed_at END,
+                lease_token = NULL, lease_expires_at = NULL, updated_at = now()
+          WHERE id = ? AND lease_token = ?`,
+        [status, result === null ? null : JSON.stringify(result), error, status, prompt.id, token]
+      )
+
     try {
       const [run] = (await service.listAgentRuns({ id: prompt.run_id })) as any[]
       // Idempotent recovery: tasks already created for this prompt are kept, never duplicated.
-      const existing = ((await service.listAgentTasks({ run_id: prompt.run_id }, { take: null })) as any[]).filter(
-        (t) => t.prompt_id === prompt.id
-      )
+      const existing = await tasksForPrompt(container, prompt)
       if (existing.length) {
         await supersedePrevious(container, existing)
-        await sqlRows(
-          container,
-          `UPDATE ai_prompt_queue SET status = 'processed', processed_at = coalesce(processed_at, now()),
-                  result = coalesce(result, ?::jsonb), updated_at = now() WHERE id = ?`,
-          [JSON.stringify({ targets: existing.map((t) => t.task_key), recovered: true }), prompt.id]
-        )
-        await recomputeRun(container, prompt.run_id)
+        await settle("processed", { targets: existing.map((t) => t.task_key), recovered: true }, null)
         continue
       }
+      const runLimits = { ...aiLimits(), ...(run.limits ?? {}) }
       const reserved = await sqlRows(
         container,
         `UPDATE ai_run SET usage = jsonb_set(coalesce(usage::jsonb, '{}'::jsonb), '{model_calls}',
                 to_jsonb(coalesce((usage::jsonb->>'model_calls')::int, 0) + 1)), updated_at = now()
           WHERE id = ? AND coalesce((usage::jsonb->>'model_calls')::int, 0) < ? RETURNING id`,
-        [run.id, { ...aiLimits(), ...(run.limits ?? {}) }.maxModelCallsPerRun]
+        [run.id, runLimits.maxModelCallsPerRun]
       )
       if (!reserved.length) {
         throw new LimitReachedError("model budget for this run")
@@ -402,36 +457,49 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
         input,
         schema: FollowUpRouteSchema,
       })
-      const targets = [...new Set(route.output.targets)]
-      const dependencies: Record<string, string[]> = { brand: [], catalogue: [], storefront: ["brand"], offers: ["catalogue"] }
-      // One batch insert, so a crash leaves either all or none of this prompt's tasks.
-      const created = (await service.createAgentTasks(
-        targets.map((key) => ({
-          run_id: run.id,
-          store_environment_id: run.store_environment_id,
-          task_key: key,
-          status: "queued",
-          depends_on: dependencies[key] ?? [],
-          max_attempts: { ...aiLimits(), ...(run.limits ?? {}) }.maxTaskAttempts,
-          instruction: route.output.instruction,
-          prompt_id: prompt.id,
-        })) as any
-      )) as any[]
+      await recordUsage(container, run.id, route.usage)
+
+      const unsupported = route.output.targets.includes("unsupported")
+      const targets: string[] = [...new Set(route.output.targets)].filter((t) => t !== "unsupported")
+      if (!targets.length) {
+        await settle("rejected", { unsupported: true }, "unsupported_request: product, price, stock and publishing changes are not follow-up targets")
+        continue
+      }
+      // A new theme only reaches the preview through a storefront rebuild.
+      if (targets.includes("brand") && !targets.includes("storefront")) {
+        targets.push("storefront")
+      }
+
+      let created: any[]
+      try {
+        created = (await service.createAgentTasks(
+          targets.map((key) => ({
+            run_id: run.id,
+            store_environment_id: run.store_environment_id,
+            task_key: key,
+            status: "queued",
+            depends_on: ACTIVE_FOLLOW_UP_DEPENDENCIES[key] ?? [],
+            max_attempts: runLimits.maxTaskAttempts,
+            instruction: route.output.instruction,
+            prompt_id: prompt.id,
+          })) as any
+        )) as any[]
+      } catch (error: any) {
+        // Unique (prompt_id, task_key): another holder already created this prompt's tasks.
+        if (!/unique|duplicate|already exists/i.test(String(error?.message))) {
+          throw error
+        }
+        created = await tasksForPrompt(container, prompt)
+      }
       await supersedePrevious(container, created)
-      await sqlRows(
-        container,
-        `UPDATE ai_prompt_queue SET status = 'processed', processed_at = now(), result = ?::jsonb, updated_at = now() WHERE id = ?`,
-        [JSON.stringify({ targets, instruction: route.output.instruction, worker: workerId }), prompt.id]
-      )
+      await settle("processed", { targets, instruction: route.output.instruction, unsupported, worker: workerId }, null)
     } catch (error: any) {
       const { retryable, code } = classify(error)
-      await sqlRows(
-        container,
-        `UPDATE ai_prompt_queue SET status = ?, error = ?, updated_at = now() WHERE id = ?`,
-        [retryable ? "queued" : "rejected", `${code}: ${String(error?.message ?? error).slice(0, 500)}`, prompt.id]
-      )
+      await settle(retryable ? "queued" : "rejected", null, `${code}: ${String(error?.message ?? error).slice(0, 500)}`)
+    } finally {
+      clearInterval(timer)
+      await recomputeRun(container, prompt.run_id).catch(() => undefined)
     }
-    await recomputeRun(container, prompt.run_id)
   }
   return claimed.length
 }

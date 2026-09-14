@@ -39,6 +39,9 @@ const AgentTask = model
     { on: ["status", "lease_expires_at"] },
     // @ts-ignore column inference
     { on: ["store_environment_id"] },
+    // A follow-up prompt creates at most one task per key, even if two workers route it.
+    // @ts-ignore column inference
+    { on: ["prompt_id", "task_key"], unique: true },
   ])
 
 export default AgentTask

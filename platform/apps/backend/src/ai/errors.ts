@@ -40,10 +40,22 @@ export class LimitReachedError extends Error {
   }
 }
 
+/** The provider refused the request itself (4xx: bad request, auth, permission, too large). Not retryable. */
+export class ModelRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, detail: string) {
+    super(`Model request rejected (${status}): ${detail}`)
+    this.name = "ModelRequestError"
+    this.status = status
+  }
+}
+
 /** Stable, non-sensitive error codes exposed to merchants. */
 export type MerchantErrorCode =
   | "model_unavailable"
   | "model_output_rejected"
   | "policy_rejected"
   | "limit_reached"
+  | "unsupported_request"
   | "internal"

@@ -692,6 +692,22 @@
           "enumItems": [],
           "mappedType": "text"
         },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamptz",
@@ -744,6 +760,15 @@
       "name": "ai_generation",
       "schema": "public",
       "indexes": [
+        {
+          "keyName": "IDX_ai_generation_idempotency_key_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_ai_generation_idempotency_key_unique\" ON \"ai_generation\" (\"idempotency_key\") WHERE deleted_at IS NULL"
+        },
         {
           "keyName": "IDX_ai_generation_deleted_at",
           "columnNames": [],
@@ -1480,6 +1505,38 @@
           "enumItems": [],
           "mappedType": "datetime"
         },
+        "lease_token": {
+          "name": "lease_token",
+          "type": "text",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": null,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "text"
+        },
+        "lease_expires_at": {
+          "name": "lease_expires_at",
+          "type": "timestamptz",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
+          "unique": false,
+          "length": 6,
+          "precision": null,
+          "scale": null,
+          "default": null,
+          "comment": null,
+          "enumItems": [],
+          "mappedType": "datetime"
+        },
         "run_id": {
           "name": "run_id",
           "type": "text",
@@ -2058,6 +2115,15 @@
           "primary": false,
           "unique": false,
           "expression": "CREATE INDEX IF NOT EXISTS \"IDX_ai_task_store_environment_id\" ON \"ai_task\" (\"store_environment_id\") WHERE deleted_at IS NULL"
+        },
+        {
+          "keyName": "IDX_ai_task_prompt_id_task_key_unique",
+          "columnNames": [],
+          "composite": false,
+          "constraint": false,
+          "primary": false,
+          "unique": false,
+          "expression": "CREATE UNIQUE INDEX IF NOT EXISTS \"IDX_ai_task_prompt_id_task_key_unique\" ON \"ai_task\" (\"prompt_id\", \"task_key\") WHERE deleted_at IS NULL"
         },
         {
           "keyName": "ai_task_pkey",

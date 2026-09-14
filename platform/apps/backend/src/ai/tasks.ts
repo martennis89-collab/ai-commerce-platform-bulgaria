@@ -111,7 +111,8 @@ const images: TaskImplementation = async (rt) => {
     await rt.step(`Снимка ${i + 1} от ${mediaIds.length}`, Math.round((90 * i) / mediaIds.length))
     await rt.tool(
       "media.attach_product_image",
-      { media_asset_id: mediaIds[i], product_id: productIds[i] },
+      // Photos are paired with drafts by upload order; provenance records that this is an inference.
+      { media_asset_id: mediaIds[i], product_id: productIds[i], pairing: "position_inference" },
       `image:${mediaIds[i]}:${productIds[i]}`
     )
     attached.push({ media_asset_id: mediaIds[i], product_id: productIds[i] })

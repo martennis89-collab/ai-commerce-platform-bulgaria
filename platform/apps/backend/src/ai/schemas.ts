@@ -74,7 +74,11 @@ export const OffersSchema = z.strictObject({
 })
 export type Offers = z.infer<typeof OffersSchema>
 
-export const FOLLOW_UP_TARGETS = ["brand", "catalogue", "storefront", "offers"] as const
+/**
+ * Follow-ups may change the brand, the home page copy and offer suggestions.
+ * Product drafts are merchant-edited (M3); such requests route to `unsupported`.
+ */
+export const FOLLOW_UP_TARGETS = ["brand", "storefront", "offers", "unsupported"] as const
 
 export const FollowUpRouteSchema = z.strictObject({
   targets: z.array(z.enum(FOLLOW_UP_TARGETS)).min(1).max(4),
@@ -95,15 +99,18 @@ export function priceStatedByMerchant(price: number, merchantText: string): bool
   if (!Number.isFinite(price) || price <= 0) {
     return false
   }
-  const forms = new Set<string>([price.toFixed(2), price.toFixed(2).replace(".", ",")])
-  if (Number.isInteger(price)) {
-    forms.add(String(price))
-  } else {
-    forms.add(String(price))
-    forms.add(String(price).replace(".", ","))
-  }
-  // The amount must be a whole number token: "18" does not match inside "118", "18.5" or "18,50".
-  return [...forms].some((form) =>
-    new RegExp(`(^|[^0-9.,])${escapeRegex(form)}(?![.,]?[0-9])`).test(merchantText)
-  )
+  const forms = new Set<string>([
+    price.toFixed(2),
+    price.toFixed(2).replace(".", ","),
+    String(price),
+    String(price).replace(".", ","),
+  ])
+  // A whole number token ("18" not inside "118", "18.5" or "18,50") ...
+  const amount = `(?:${[...forms].map(escapeRegex).join("|")})(?![.,]?[0-9])`
+  // ... that is marked as a EUR price, or is a typed `price_eur` fact. "900 г" or "18 лв" never count.
+  return [
+    new RegExp(`(^|[^0-9.,])${amount}\\s*(€|евро|eur(?![a-z])|euro)`, "iu"),
+    new RegExp(`(€|(^|[^a-z])eur)\\s*${amount}`, "iu"),
+    new RegExp(`"price_eur"\\s*:\\s*${amount}`),
+  ].some((pattern) => pattern.test(merchantText))
 }

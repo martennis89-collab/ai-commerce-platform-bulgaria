@@ -22,6 +22,8 @@ const Generation = model.define("ai_generation", {
   provenance: model.json(),
   resource_type: model.text().nullable(),
   resource_id: model.text().nullable(),
+  /** Run-scoped tool idempotency key; unique so a stale lease holder cannot create a second generation. */
+  idempotency_key: model.text().unique().nullable(),
 })
 
 export default Generation

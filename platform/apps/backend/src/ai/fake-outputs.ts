@@ -95,7 +95,7 @@ registerFakeGenerator("followup.route", (input) => {
   const lower = prompt.toLowerCase()
   const targets = new Set<string>()
   if (/цвят|цветове|стил|бранд|шрифт/.test(lower)) targets.add("brand")
-  if (/продукт|описани|каталог/.test(lower)) targets.add("catalogue")
+  if (/продукт|описани|каталог|цен|наличност/.test(lower)) targets.add("unsupported")
   if (/начал|заглав|текст|страниц|за нас/.test(lower)) targets.add("storefront")
   if (/оферт|отстъп|промо/.test(lower)) targets.add("offers")
   if (!targets.size) targets.add("storefront")

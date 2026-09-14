@@ -37,6 +37,42 @@
     - The applied theme equals the platform default. Record `theme_source` in the smoke output next time.
   - **Credential hygiene.** The user pasted the key into a terminal command, so it is in terminal scrollback and on 2 PowerShell history lines. It is not in any tracked file. Advised the user to revoke and rotate it.
 - **Pushed** `mission/m2-durable-generation`; draft PR #3 into `main` opened (user-approved).
+- **Gate round 1 (at `0b42bc8`): REJECTED.** The independent review returned CHANGES REQUIRED. It found no cross-tenant problem, no draft visibility, and no bypass of the tool gate. All findings are fixed on the branch; re-test results are below or in TESTS.json.
+  - **M1 (pause/resume in flight).** Pause is no longer cached between checkpoints. A task whose run was resumed before it stopped is re-queued without spending an attempt. The sweep re-queues stranded paused tasks. Test: M2-T04b.
+  - **M2 (follow-up processed twice).** Prompts now have a lease: `lease_token`, `lease_expires_at` and a heartbeat. Writes are fenced by the token. A unique index on `ai_task(prompt_id, task_key)` blocks duplicate tasks. Test: M2-T04c.
+  - **M3 (stale run status).** `recomputeRun` is serialised per run with a Postgres advisory lock. `sweepExpired` recomputes every active run on each tick. Test: M2-T02c.
+  - **M4 (catalogue follow-ups did nothing).** `catalogue` was removed from the follow-up targets. Product, price, stock and publishing requests route to `unsupported`, and the prompt is rejected with `unsupported_request`. A brand follow-up also rebuilds the storefront. Test: M2-T04.
+  - **M5 (duplicate drafts after lease loss).** `ai_generation.idempotency_key` is a unique column, and generation lookup uses it.
+  - **L1.** Added the ARCHITECTURE.md M2 section.
+  - **L2 (active-run limit).**
+    - Starting a run takes a per-store advisory lock.
+    - Retry and follow-up cannot reactivate a finished run while another run is active.
+    - Enqueueing a prompt takes a per-run lock. Test: M2-T13 concurrent start.
+  - **L3.** Resume extends the deadline. Paused runs are excluded from the deadline sweep.
+  - **L4.** Anthropic 4xx responses raise `ModelRequestError`, which is not retried. Routing calls now record their token usage.
+  - **L5.** The price guard requires a EUR marker (€, евро, EUR) or a typed `price_eur` fact. "900 г" and "18 лв" do not count.
+  - **L6.** Image pairing provenance records `position_inference`.
+  - **L7.** The storefront-schema regexes use `\u00XX` escapes; the file has no raw control bytes.
+  - **L8.** A `StorefrontConfigError` inside a tool is a non-retryable `ToolRejectedError`.
+  - **L10.**
+    - M2-T14 runs a real stale `runLeasedDeployment` holder.
+    - M2-T07 adds another store's task id on the caller's own run.
+    - The vacuous secret assertion in M2-T08 was removed.
+    - The M2-T14 wording in TESTS.json was corrected.
+  - **L11.** Retry resets `tool_calls`.
+  - **Carried as notes, not fixed.**
+    - L9: the subscriber still triggers leased builds in the requesting process, and there is no deployment heartbeat.
+    - L10: M2-T11 renders fake-model output, not a real-model palette.
+    - Refused or truncated outputs do not record their tokens.
+  - **Migration.** `src/modules/ai/migrations/Migration20260914223307.ts`.
+  - **Also fixed during re-test.** Run summaries return tasks in a stable order (brand, catalogue, images, storefront, offers). A batch insert gives all tasks the same `created_at`, which made the order random.
+  - **Re-tested after the fixes (2026-09-15):**
+    - Typecheck: 0 errors.
+    - Unit: 147/147.
+    - Integration: 78/78, including M2 17/17.
+    - Baseline: 6/6.
+    - E2E: 5/5.
+    - The M2-T15 live smoke is from before these fixes. Initial-generation prompts are unchanged; routing and the price guard are stricter.
 - **Pending.**
   - Independent review.
   - mission-gate-review.

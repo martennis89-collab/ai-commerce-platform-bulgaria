@@ -4,11 +4,11 @@
  * reads/writes only rows of that StoreEnvironment; foreign ids are "not found".
  */
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { MedusaError } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
 import { z } from "zod"
 import { AI_MODULE } from "../modules/ai"
 import type { RunStatus, TaskKey } from "../modules/ai/models"
-import { TERMINAL_STATUSES } from "../modules/ai/models"
+import { TASK_KEYS, TERMINAL_STATUSES } from "../modules/ai/models"
 import type AiModuleService from "../modules/ai/service"
 import { ExecutionContext, requirePermission } from "../tenancy/context"
 import { aiLimits } from "./config"
@@ -66,7 +66,7 @@ export function errorCodeOf(error: string | null | undefined): MerchantErrorCode
     return null
   }
   const code = error.split(":")[0]
-  return (["model_unavailable", "model_output_rejected", "policy_rejected", "limit_reached", "internal"] as const).includes(
+  return (["model_unavailable", "model_output_rejected", "policy_rejected", "limit_reached", "unsupported_request", "internal"] as const).includes(
     code as MerchantErrorCode
   )
     ? (code as MerchantErrorCode)
@@ -113,6 +113,10 @@ export async function startInitialGeneration(ctx: ExecutionContext, rawBody: unk
     }
   }
 
+  const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  // Serialise starts per store so concurrent requests cannot both pass the limit checks.
+  const runId: string = await knex.transaction(async (trx: any) => {
+  await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`ai_start:${env}`])
   const [counts] = await sqlRows(
     container,
     `SELECT
@@ -148,14 +152,21 @@ export async function startInitialGeneration(ctx: ExecutionContext, rawBody: unk
       max_attempts: limits.maxTaskAttempts,
     })) as any
   )
-  return getRunSummary(ctx, run.id)
+  return run.id as string
+  })
+  return getRunSummary(ctx, runId)
 }
 
 export async function getRunSummary(ctx: ExecutionContext, runId: string) {
   requirePermission(ctx, "ai:read")
   const run = await loadOwnedRun(ctx, runId)
   const ai = service(ctx.scope.container)
-  const tasks = (await ai.listAgentTasks({ run_id: run.id }, { take: null, order: { created_at: "ASC" } })) as any[]
+  // Tasks inserted in one batch share created_at; the fixed task-key order keeps the API and stream stable.
+  const tasks = ((await ai.listAgentTasks({ run_id: run.id }, { take: null })) as any[]).sort(
+    (a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime() ||
+      TASK_KEYS.indexOf(a.task_key) - TASK_KEYS.indexOf(b.task_key)
+  )
   const prompts = (await ai.listPromptQueueItems({ run_id: run.id }, { take: null, order: { sequence: "ASC" } })) as any[]
   return {
     id: run.id,
@@ -184,7 +195,7 @@ export async function getRunSummary(ctx: ExecutionContext, runId: string) {
       error_code: errorCodeOf(t.error),
       finished_at: t.finished_at,
     })),
-    prompts: prompts.map((p) => ({ id: p.id, sequence: p.sequence, status: p.status })),
+    prompts: prompts.map((p) => ({ id: p.id, sequence: p.sequence, status: p.status, error_code: errorCodeOf(p.error) })),
   }
 }
 
@@ -218,6 +229,23 @@ export async function listRunGenerations(ctx: ExecutionContext, runId: string) {
   })
 }
 
+/** Reactivating a finished run (retry, follow-up) must not bypass the active-run limit. */
+async function assertNoOtherActiveRun(container: MedusaContainer, storeEnvironmentId: string, run: any) {
+  if (!TERMINAL_STATUSES.includes(run.status)) {
+    return
+  }
+  const [{ n }] = await sqlRows(
+    container,
+    `SELECT count(*)::int AS n FROM ai_run
+      WHERE store_environment_id = ? AND id <> ? AND deleted_at IS NULL
+        AND status IN ('queued', 'running', 'waiting', 'paused')`,
+    [storeEnvironmentId, run.id]
+  )
+  if (n >= ({ ...aiLimits(), ...(run.limits ?? {}) }).maxActiveRunsPerStore) {
+    throw limit("another generation is already running for this store")
+  }
+}
+
 export async function cancelRun(ctx: ExecutionContext, runId: string) {
   requirePermission(ctx, "ai:generate")
   const run = await loadOwnedRun(ctx, runId)
@@ -249,8 +277,21 @@ export async function resumeRun(ctx: ExecutionContext, runId: string) {
   requirePermission(ctx, "ai:generate")
   const run = await loadOwnedRun(ctx, runId)
   const container = ctx.scope.container
-  if (run.pause_requested_at && !run.cancel_requested_at) {
-    await sqlRows(container, `UPDATE ai_run SET pause_requested_at = NULL, updated_at = now() WHERE id = ?`, [run.id])
+  const [{ paused }] = await sqlRows(
+    container,
+    `SELECT count(*)::int AS paused FROM ai_task WHERE run_id = ? AND status = 'paused' AND deleted_at IS NULL`,
+    [run.id]
+  )
+  if (!run.cancel_requested_at && (run.pause_requested_at || paused > 0)) {
+    // Paused time does not count against the run: the deadline restarts on resume.
+    await sqlRows(
+      container,
+      `UPDATE ai_run SET pause_requested_at = NULL,
+              deadline_at = greatest(coalesce(deadline_at, now()), now() + (? * interval '1 millisecond')),
+              updated_at = now()
+        WHERE id = ?`,
+      [({ ...aiLimits(), ...(run.limits ?? {}) }).maxRunDurationMs, run.id]
+    )
     await sqlRows(
       container,
       `UPDATE ai_task SET status = 'queued', updated_at = now() WHERE run_id = ? AND status = 'paused' AND deleted_at IS NULL`,
@@ -268,10 +309,11 @@ export async function retryTask(ctx: ExecutionContext, runId: string, taskId: st
     throw invalid("A cancelled run cannot be retried")
   }
   const container = ctx.scope.container
+  await assertNoOtherActiveRun(container, ctx.scope.storeEnvironmentId, run)
   const updated = await sqlRows(
     container,
     `UPDATE ai_task
-       SET status = 'queued', error = NULL, finished_at = NULL, lease_token = NULL, lease_owner = NULL,
+       SET status = 'queued', error = NULL, finished_at = NULL, lease_token = NULL, lease_owner = NULL, tool_calls = 0,
            lease_expires_at = NULL, max_attempts = attempt + ?, updated_at = now()
      WHERE id = ? AND run_id = ? AND status = 'failed' AND superseded_by IS NULL AND deleted_at IS NULL
      RETURNING id`,
@@ -304,18 +346,23 @@ export async function enqueueFollowUp(ctx: ExecutionContext, runId: string, rawB
     throw invalid("A cancelled run cannot take follow-up prompts")
   }
   const container = ctx.scope.container
-  const [{ count }] = await sqlRows(container, `SELECT count(*) AS count FROM ai_prompt_queue WHERE run_id = ? AND deleted_at IS NULL`, [run.id])
-  if (Number(count) >= limits.maxFollowUpsPerRun) {
-    throw limit("follow-up prompts for this run")
-  }
-  // The unique (run_id, sequence) index makes concurrent enqueues fail rather than share a sequence.
-  await service(container).createPromptQueueItems({
-    run_id: run.id,
-    store_environment_id: ctx.scope.storeEnvironmentId,
-    sequence: Number(count) + 1,
-    prompt: parsed.data.prompt,
-    status: "queued",
-  } as any)
+  await assertNoOtherActiveRun(container, ctx.scope.storeEnvironmentId, run)
+  const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  // Serialise enqueues per run so concurrent prompts get distinct sequences (the unique index stays as a backstop).
+  await knex.transaction(async (trx: any) => {
+    await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`ai_prompt:${run.id}`])
+    const [{ count }] = await sqlRows(container, `SELECT count(*) AS count FROM ai_prompt_queue WHERE run_id = ? AND deleted_at IS NULL`, [run.id])
+    if (Number(count) >= limits.maxFollowUpsPerRun) {
+      throw limit("follow-up prompts for this run")
+    }
+    await service(container).createPromptQueueItems({
+      run_id: run.id,
+      store_environment_id: ctx.scope.storeEnvironmentId,
+      sequence: Number(count) + 1,
+      prompt: parsed.data.prompt,
+      status: "queued",
+    } as any)
+  })
   await sqlRows(
     container,
     `UPDATE ai_run SET deadline_at = greatest(coalesce(deadline_at, now()), now() + (? * interval '1 millisecond')), updated_at = now() WHERE id = ?`,
@@ -331,6 +378,15 @@ export async function enqueueFollowUp(ctx: ExecutionContext, runId: string, rawB
  * fail or recover. Safe to call from anywhere, any number of times.
  */
 export async function recomputeRun(container: MedusaContainer, runId: string) {
+  const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  // Serialise recomputes per run: a status derived from a stale read can never land after a newer one.
+  await knex.transaction(async (trx: any) => {
+    await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`ai_run:${runId}`])
+    await recomputeRunLocked(container, runId)
+  })
+}
+
+async function recomputeRunLocked(container: MedusaContainer, runId: string) {
   const ai = service(container)
   const [run] = (await ai.listAgentRuns({ id: runId })) as any[]
   if (!run) {

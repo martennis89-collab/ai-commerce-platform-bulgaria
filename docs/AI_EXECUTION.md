@@ -34,11 +34,27 @@ merchant ◀──GET /merchant/ai/runs/:id/events (SSE)── run/task status, 
 - **Claim**: one atomic `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED)` sets `running`, a new `lease_token`, `lease_expires_at` and `attempt + 1`. Only tasks whose dependencies are `completed`, whose run is not paused, cancelled or past its deadline, and with attempts left are claimable.
 - **Heartbeat** every `lease/3`; each heartbeat also reports cancel/pause/deadline, which the task observes at its next checkpoint (before every step, model call and tool call).
 - **Fencing**: progress, tool-call budget, completion and failure writes all require `lease_token = <mine>`. A worker whose lease expired and was re-claimed cannot write anything, including tool calls (`LeaseLostError`).
-- **Crash recovery**: an expired `running` lease is claimable by any worker; `sweepExpired` fails tasks that exhausted their attempts and runs past their deadline.
+- **Crash recovery**: an expired `running` lease is claimable by any worker. On every tick, `sweepExpired`:
+  - fails tasks that exhausted their attempts, and tasks of non-paused runs past their deadline;
+  - re-queues tasks left `paused` in runs that are no longer paused;
+  - recomputes every active run.
+- **Run status**: `recomputeRun` is serialised per run with a Postgres advisory lock, so a status derived from a stale read never overwrites a newer one.
 - **Idempotency**: every tool call has a stable key `<run>:<task>:<call>`. `ai_action.idempotency_key` is unique; a `succeeded` action replays its stored result instead of running again. Handlers are also idempotent against partial crashes (generation lookup by key, deterministic product handle `ai-<generation id>`, deployment `request_key`).
 - **Retry**: transient model errors and unknown errors retry with a short backoff up to `max_attempts`; invalid model output, policy rejections and limits fail immediately. `POST …/tasks/:task_id/retry` re-queues a failed task with a fresh attempt budget.
-- **Follow-up prompts** (`ai_prompt_queue`) are processed strictly by `sequence`, and only when no task of the run is queued or running. Each is routed (Haiku tier) to target tasks, which supersede the previous task of that key.
-- **Cancel / pause / resume**: cancel marks queued tasks cancelled and stops running ones at the next checkpoint; pause stops at the next checkpoint without consuming an attempt; resume re-queues paused tasks.
+- **Follow-up prompts** (`ai_prompt_queue`):
+  - **Order.** Prompts are processed strictly by `sequence`, and only when no task of the run is queued or running.
+  - **Lease.** While a prompt is routed (Haiku tier) it holds a lease: `lease_token`, `lease_expires_at` and a heartbeat. A slow routing call is never picked up by a second worker, and a crashed worker's prompt is recovered after its lease expires. Tasks are unique per `(prompt_id, task_key)`, and a recovered prompt reuses tasks it already created.
+  - **Targets.** Follow-ups can target:
+    - `brand`, which also rebuilds `storefront` so the new theme reaches the preview;
+    - `storefront` (home page copy);
+    - `offers`.
+  - **Unsupported requests.** Product, description, price, stock and publishing requests route to `unsupported`. Such a prompt is rejected with `unsupported_request`, because product drafts are merchant-edited (M3).
+  - **Supersession.** New tasks supersede the previous task of the same key.
+- **Cancel / pause / resume**:
+  - Cancel marks queued tasks cancelled and stops running ones at the next checkpoint.
+  - Pause is re-read at every checkpoint and stops the task without consuming an attempt. A task whose run was resumed before it reached the checkpoint is re-queued instead of paused.
+  - Resume re-queues paused tasks and restarts the run deadline.
+- **Concurrency limits**: starting a run takes a per-store advisory lock, so concurrent requests cannot exceed `AI_MAX_ACTIVE_RUNS_PER_STORE`. Retry and follow-up cannot reactivate a finished run while another run is active.
 
 ### Worker hosting (D3)
 
@@ -52,8 +68,10 @@ Every call, in order: tenant selector scan on raw args → strict input schema �
 
 Merchant-trust rules enforced in handlers:
 
-- Product drafts are Medusa `draft` products with `manage_inventory: false`, claimed by the StoreEnvironment, provenance in `metadata.ai` and an `ai_generation` row. Prices are set only when `priceStatedByMerchant` finds that exact amount in the merchant's own text; stock is never set. Store API routes only return published products.
-- Images: only the store's own `MediaAsset` (ownership-checked `media_file`) onto the store's own AI draft.
+- Product drafts are Medusa `draft` products with `manage_inventory: false`, claimed by the StoreEnvironment, provenance in `metadata.ai` and an `ai_generation` row. Prices are set only when `priceStatedByMerchant` finds that exact amount in the merchant's own text, either marked as EUR (€, евро, EUR) or given as a typed `price_eur` fact. Weights such as "900 г" and leva amounts never count. Stock is never set. Store API routes only return published products.
+- Images: only the store's own `MediaAsset` (ownership-checked `media_file`) can be attached, and only to the store's own AI draft. Pairing provenance records whether the photo–product match was inferred from upload order (`position_inference`) or specified.
+- Generated artifacts are unique per run-scoped idempotency key (`ai_generation.idempotency_key`). A worker that outlived its lease cannot create a second draft.
+- A `StorefrontConfigError` raised inside a tool is a non-retryable policy rejection. Anthropic 4xx responses are not retried either.
 - Theme: a palette that fails the storefront-schema v2 contrast rules is replaced by the validated platform colours (`theme_source: platform_default`).
 - Offers are stored as suggestions only; no promotion is created.
 

@@ -12,6 +12,9 @@ const PromptQueueItem = model
     result: model.json().nullable(),
     error: model.text().nullable(),
     processed_at: model.dateTime().nullable(),
+    /** Fencing lease while a worker routes the prompt; expired leases are recoverable. */
+    lease_token: model.text().nullable(),
+    lease_expires_at: model.dateTime().nullable(),
     run: model.belongsTo(() => AgentRun, { mappedBy: "prompts" }),
   })
   .indexes([

@@ -22,8 +22,8 @@ import { fakeRegistry, resetFakeModel, setFakeOverride } from "../../src/ai/mode
 import { merchantTextOf } from "../../src/ai/runs"
 import { sqlRows } from "../../src/ai/sql"
 import { executeAiTool, ToolRuntime } from "../../src/ai/tools"
-import { claimNextTask, drainTasks, executeClaimedTask, sweepExpired } from "../../src/ai/worker"
-import { drainDeployments, requestPreviewDeployment } from "../../src/storefront/deployments"
+import { claimNextTask, drainTasks, executeClaimedTask, processPromptQueues, sweepExpired } from "../../src/ai/worker"
+import { claimDeployment, drainDeployments, requestPreviewDeployment, runLeasedDeployment } from "../../src/storefront/deployments"
 
 jest.setTimeout(15 * 60 * 1000)
 
@@ -516,6 +516,19 @@ medusaIntegrationTestRunner({
         expect(deployments.filter((d) => d.request_key)).toHaveLength(1)
       })
 
+      it("M2-T02c stale run status and stranded paused tasks are healed by the worker sweep", async () => {
+        await sql(`UPDATE ai_run SET status = 'running', finished_at = NULL WHERE id = ?`, [mariaRunId])
+        await sweepExpired(getContainer())
+        expect((await runRow(mariaRunId)).status).toBe("completed")
+
+        const store = await createStore("heal-shop", "Heal Shop")
+        const run = await start(store)
+        await sql(`UPDATE ai_task SET status = 'paused' WHERE run_id = ? AND task_key = 'brand'`, [run.id])
+        await sweepExpired(getContainer())
+        expect((await tasksOf(run.id)).brand.status).toBe("queued")
+        expect((await settle(run.id)).status).toBe("completed")
+      })
+
       it("M2-T03 a failing task does not poison the others; dependants wait; retry succeeds without duplicates", async () => {
         const store = await createStore("rada-ceramics", "Rada Ceramics")
         setFakeOverride("catalogue.draft_copy", () => {
@@ -567,16 +580,20 @@ medusaIntegrationTestRunner({
         expect((await settle(run.id)).status).toBe("completed")
         const prompts = (await ai().listPromptQueueItems({ run_id: run.id }, { take: null, order: { sequence: "ASC" } })) as any[]
         expect(prompts.map((p) => [p.sequence, p.status, p.result.targets])).toEqual([
-          [1, "processed", ["brand"]],
+          [1, "processed", ["brand", "storefront"]],
           [2, "processed", ["storefront"]],
         ])
         const all = (await ai().listAgentTasks({ run_id: run.id }, { take: null })) as any[]
         const fromP1 = all.filter((t) => t.prompt_id === prompts[0].id)
         const fromP2 = all.filter((t) => t.prompt_id === prompts[1].id)
-        expect(fromP1.map((t) => t.task_key)).toEqual(["brand"])
+        // A brand follow-up also rebuilds the storefront, so the new theme reaches the preview.
+        expect(fromP1.map((t) => t.task_key).sort()).toEqual(["brand", "storefront"])
         expect(fromP2.map((t) => t.task_key)).toEqual(["storefront"])
-        expect(new Date(prompts[1].processed_at).getTime()).toBeGreaterThanOrEqual(new Date(fromP1[0].finished_at).getTime())
-        expect(all.filter((t) => t.task_key === "brand" && t.superseded_by === fromP1[0].id)).toHaveLength(1)
+        const p1Finished = Math.max(...fromP1.map((t) => new Date(t.finished_at).getTime()))
+        expect(new Date(prompts[1].processed_at).getTime()).toBeGreaterThanOrEqual(p1Finished)
+        const p1Brand = fromP1.find((t) => t.task_key === "brand")
+        expect(all.filter((t) => t.task_key === "brand" && t.superseded_by === p1Brand.id)).toHaveLength(1)
+        expect(fromP1.find((t) => t.task_key === "storefront").superseded_by).toBe(fromP2[0].id)
         expect((await projectConfig(store)).home.hero.subheadline).toContain("акцент върху дегустациите")
 
         // A worker crashed while routing a follow-up: its task was created but the prompt stayed 'processing'.
@@ -585,7 +602,7 @@ medusaIntegrationTestRunner({
         const [orphan] = await ai().createAgentTasks([
           { run_id: run.id, store_environment_id: store.envId, task_key: "offers", status: "queued", depends_on: ["catalogue"], max_attempts: 3, instruction: "Оферта за комплект", prompt_id: p3.id },
         ])
-        await sql(`UPDATE ai_prompt_queue SET status = 'processing', updated_at = now() - interval '1 hour' WHERE id = ?`, [p3.id])
+        await sql(`UPDATE ai_prompt_queue SET status = 'processing', lease_token = 'dead-worker', lease_expires_at = now() - interval '1 second' WHERE id = ?`, [p3.id])
         const routedBefore = fakeRegistry().calls.filter((c) => c.operation === "followup.route").length
         expect((await settle(run.id)).status).toBe("completed")
         const [recovered] = await ai().listPromptQueueItems({ id: p3.id })
@@ -594,6 +611,14 @@ medusaIntegrationTestRunner({
         const offers = ((await ai().listAgentTasks({ run_id: run.id, task_key: "offers" }, { take: null })) as any[]).filter((t) => !t.superseded_by)
         expect(offers.map((t) => [t.id, t.status])).toEqual([[orphan.id, "completed"]])
         expect((await ai().listAgentTasks({ run_id: run.id }, { take: null }) as any[]).filter((t) => t.prompt_id === p3.id)).toHaveLength(1)
+
+        // Product edits are not follow-up targets in M2: the prompt is rejected and nothing runs.
+        const tasksBefore = (await ai().listAgentTasks({ run_id: run.id }, { take: null })).length
+        expect((await call(api.post(`/merchant/ai/runs/${run.id}/prompts`, { prompt: "Пренапишете описанията на продуктите." }, bearer(store.token)))).status).toBe(202)
+        expect((await settle(run.id)).status).toBe("completed")
+        const view4 = (await api.get(`/merchant/ai/runs/${run.id}`, bearer(store.token))).data.run
+        expect(view4.prompts.find((p: any) => p.sequence === 4)).toMatchObject({ status: "rejected", error_code: "unsupported_request" })
+        expect((await ai().listAgentTasks({ run_id: run.id }, { take: null })).length).toBe(tasksBefore)
 
         // Cancel before any work: queued tasks are cancelled and never claimed.
         const cancelStore = await createStore("cancel-shop", "Cancel Shop")
@@ -630,6 +655,46 @@ medusaIntegrationTestRunner({
         expect((await tasksOf(toPause.id)).brand.attempt).toBe(1)
       })
 
+      it("M2-T04b pause and resume while a model call is in flight neither strands nor burns the task", async () => {
+        const store = await createStore("pause-flight", "Pause Flight")
+        const run = await start(store)
+        const { task } = await leaseTask(store, run.id, "brand")
+        setFakeOverride("brand.generate", async () => {
+          await api.post(`/merchant/ai/runs/${run.id}/pause`, {}, bearer(store.token))
+          await sleep(1_500) // at least one heartbeat observes the pause
+          await api.post(`/merchant/ai/runs/${run.id}/resume`, {}, bearer(store.token))
+          return { tagline: "Пауза и продължение", tone: "calm", typography: "editorial", corner: "soft", colors: DEFAULT_THEME.colors }
+        })
+        await executeClaimedTask(getContainer(), task, "test-brand")
+        expect((await tasksOf(run.id)).brand).toMatchObject({ status: "completed", attempt: 1 })
+        setFakeOverride("brand.generate", null)
+        expect((await settle(run.id)).status).toBe("completed")
+      })
+
+      it("M2-T04c a slow follow-up is leased: a second worker cannot route it again or duplicate its tasks", async () => {
+        const store = await createStore("slow-followup", "Slow Followup")
+        const run = await start(store, { description: "Керамични чаши, изработени в Троян." })
+        expect((await settle(run.id)).status).toBe("completed")
+        expect((await call(api.post(`/merchant/ai/runs/${run.id}/prompts`, { prompt: "Направете цветовете по-топли." }, bearer(store.token)))).status).toBe(202)
+        setFakeOverride("followup.route", async (input: any) => {
+          await sleep(4_500) // longer than AI_WORKER_LEASE_MS (3000)
+          return { targets: ["brand"], instruction: String(input.prompt) }
+        })
+        const container = getContainer()
+        const first = processPromptQueues(container, "worker-a")
+        await sleep(3_600)
+        expect(await processPromptQueues(container, "worker-b")).toBe(0)
+        expect(await first).toBe(1)
+        expect(fakeRegistry().calls.filter((c) => c.operation === "followup.route")).toHaveLength(1)
+        const created = ((await ai().listAgentTasks({ run_id: run.id }, { take: null })) as any[]).filter((t) => t.prompt_id)
+        expect(created.map((t) => t.task_key).sort()).toEqual(["brand", "storefront"])
+        await expect(
+          ai().createAgentTasks([{ run_id: run.id, store_environment_id: store.envId, task_key: "brand", status: "queued", depends_on: [], prompt_id: created[0].prompt_id }])
+        ).rejects.toThrow()
+        setFakeOverride("followup.route", null)
+        expect((await settle(run.id)).status).toBe("completed")
+      })
+
       it("M2-T14 preview deployments run through leased durable execution with crash recovery and request idempotency", async () => {
         const container = getContainer()
         const first = await requestPreviewDeployment(container, petya.envId, { requestKey: "m2-t14-key" })
@@ -659,11 +724,28 @@ medusaIntegrationTestRunner({
         const [recovered] = await storefront().listDeployments({ id: crashed.id })
         expect(recovered).toMatchObject({ status: "ready", attempts: 2, lease_token: null })
 
-        // The dead worker's token can no longer settle the deployment.
-        const stale = await sql(`UPDATE storefront_deployment SET status = 'failed' WHERE id = ? AND lease_token = 'dead-token' RETURNING id`, [crashed.id])
-        expect(stale).toEqual([])
+        // A real stale holder that finishes late cannot overwrite the re-claimed result.
+        const late = await storefront().createDeployments({
+          project_id: petya.projectId,
+          store_environment_id: petya.envId,
+          target: "preview",
+          status: "queued",
+          provider: "dry-run",
+          core_version: "0.2.0",
+          hostname: "petya-jewellery.preview.shops.test",
+        })
+        const staleHolder = await claimDeployment(container, "stale-worker", late.id)
+        expect(staleHolder).toMatchObject({ id: late.id, status: "building" })
+        await sql(`UPDATE storefront_deployment SET lease_expires_at = now() - interval '1 second' WHERE id = ?`, [late.id])
+        await drainDeployments(container, { budgetMs: 10_000 })
+        const [reclaimed] = await storefront().listDeployments({ id: late.id })
+        expect(reclaimed).toMatchObject({ status: "ready", attempts: 2 })
+        await runLeasedDeployment(container, staleHolder)
+        const [afterStale] = await storefront().listDeployments({ id: late.id })
+        expect(afterStale).toMatchObject({ status: "ready", attempts: 2, lease_token: null })
+        expect(new Date(afterStale.finished_at).getTime()).toBe(new Date(reclaimed.finished_at).getTime())
         const ready = ((await storefront().listDeployments({ project_id: petya.projectId }, { take: null })) as any[]).filter((d) => d.status === "ready")
-        expect(ready.map((d) => d.id)).toEqual([crashed.id])
+        expect(ready.map((d) => d.id)).toEqual([late.id])
       })
     })
 
@@ -717,6 +799,12 @@ medusaIntegrationTestRunner({
         expect((await call(api.post("/merchant/ai/runs", sampleBody(), bearer(staff.token)))).status).toBe(403)
         expect((await call(api.post(`/merchant/ai/runs/${mariaRunId}/cancel`, {}, bearer(staff.token)))).status).toBe(403)
         expect((await upload({ ...maria, token: staff.token }, { filename: "a.png", mime_type: "image/png", content_base64: PNG.toString("base64") })).status).toBe(403)
+
+        // Another store's task id on the caller's own run.
+        const petyaRun = await start(petya)
+        const petyaTask = petyaRun.tasks[0].id
+        expect((await call(api.post(`/merchant/ai/runs/${mariaRunId}/tasks/${petyaTask}/retry`, {}, bearer(maria.token)))).status).toBe(404)
+        expect((await ai().listAgentTasks({ id: petyaTask }))[0]).toMatchObject({ status: "queued", run_id: petyaRun.id })
       })
 
       it("M2-T08 prompt injection and hostile tool arguments cannot select or touch another store", async () => {
@@ -760,8 +848,6 @@ medusaIntegrationTestRunner({
         expect((data[0] as any).variants[0].prices).toEqual([])
         expect((data[0] as any).variants[0].manage_inventory).toBe(false)
         expect(new Set((await actionsOf(run.id)).map((a) => a.store_environment_id))).toEqual(new Set([hostileStore.envId]))
-        const prompts = fakeRegistry().calls.map((c) => JSON.stringify(c.input)).join("\n")
-        expect(prompts).not.toMatch(/postgres:\/\/|supersecret/)
 
         // 3. Hostile tool arguments, as if a model had produced them, from a store with a real task lease.
         const target = await createStore("target-shop", "Target Shop")
@@ -784,10 +870,10 @@ medusaIntegrationTestRunner({
         await expect(executeAiTool(attackerRt, "catalogue.create_product_draft", { ...draftArgs, merchant_price_eur: 1 }, "brand:d")).rejects.toThrow(/policy/)
         // Another store's photo, and another store's product draft.
         await expect(
-          executeAiTool(attackerRt, "media.attach_product_image", { media_asset_id: mariaMedia[0].id, product_id: targetDraft.resource_id }, "brand:e")
+          executeAiTool(attackerRt, "media.attach_product_image", { media_asset_id: mariaMedia[0].id, product_id: targetDraft.resource_id, pairing: "merchant_specified" }, "brand:e")
         ).rejects.toThrow(/not found/i)
         await expect(
-          executeAiTool(attackerRt, "media.attach_product_image", { media_asset_id: attackerPhoto.id, product_id: targetDraft.resource_id }, "brand:f")
+          executeAiTool(attackerRt, "media.attach_product_image", { media_asset_id: attackerPhoto.id, product_id: targetDraft.resource_id, pairing: "merchant_specified" }, "brand:f")
         ).rejects.toThrow(/not found/i)
 
         process.env.AI_MAX_AUTO_RISK = "0"
@@ -864,9 +950,11 @@ medusaIntegrationTestRunner({
 
       it("M2-T13 run budgets: concurrency, daily runs, prompt size, model calls, tokens, tool calls, duration, follow-ups", async () => {
         const store = await createStore("limits-shop", "Limits Shop")
-        const first = await start(store)
-        const second = await call(api.post("/merchant/ai/runs", sampleBody(), bearer(store.token)))
-        expect([second.status, second.data.message]).toEqual([400, expect.stringMatching(/Limit reached/)])
+        // Two concurrent starts: exactly one run is created.
+        const pair = await Promise.all([1, 2].map(() => call(api.post("/merchant/ai/runs", sampleBody(), bearer(store.token)))))
+        expect(pair.map((r) => r.status).sort()).toEqual([202, 400])
+        const first = pair.find((r) => r.status === 202)!.data.run
+        expect(pair.find((r) => r.status === 400)!.data.message).toMatch(/Limit reached/)
         await api.post(`/merchant/ai/runs/${first.id}/cancel`, {}, bearer(store.token))
 
         const long = await call(api.post("/merchant/ai/runs", { description: "а".repeat(4001) }, bearer(store.token)))

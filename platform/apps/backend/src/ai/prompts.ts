@@ -26,7 +26,7 @@ const OPERATION_RULES: Record<string, string> = {
   "offers.suggest":
     "Suggest at most three offers the merchant could review later. These are recommendations only and will not be applied. Base them on the listed products; do not promise discounts to customers.",
   "followup.route":
-    "Classify the merchant's follow-up request: which parts of the store it asks to change (brand, catalogue, storefront, offers), and restate the request as a short instruction in Bulgarian.",
+    "Classify the merchant's follow-up request: which parts of the store it asks to change — brand (colours, typography, tagline), storefront (home page texts), offers (offer suggestions). Use unsupported for requests about products, product descriptions, prices, stock, publishing or anything else. Restate the request as a short instruction in Bulgarian.",
 }
 
 export function systemPrompt(operation: string): string {
