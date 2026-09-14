@@ -7,7 +7,7 @@
 | Date | 2026-09-14 |
 | Lead model | `claude-opus-5` (MODEL_ROUTING: tenancy/security → Opus, high) |
 | Commerce engine | Medusa `2.21.0` (latest at evaluation), Node 24.14, PostgreSQL 16 |
-| Status | Red-team finding (MEDIUM) remediated and hardened. Independent final review found MI-1 (automatic promotions) plus minors; all fixed. Awaiting repeat independent final review |
+| Status | Final: red-team finding (MEDIUM) and final-review MI-1 remediated. Repeat independent final review of `db6ed9e`: **ACCEPTED**, no material issues |
 
 ## Decision
 
@@ -99,7 +99,7 @@ Structural properties that keep later milestones safe by default:
 - **Global customer data is stripped at the Store API boundary.** Red-team tests RT01/RT02 proved Medusa can serialize its global customer relation through cart/order query fields and defaults; the first remediation stripped only top-level fields on routes with a response backstop. Opus re-review probe RT03 then showed `DELETE /store/carts/:id/line-items/:line_id` still returned the global customer inside `parent.cart`. The storefront guard now removes `customer`/`customer_id` at any depth on every guarded route (after `toJSON`, so totals survive) and rejects field paths naming a customer segment anywhere (RT04: 15 expansion variants, no leak). The pre-fix exposure contradicted §5.5; it is closed without changing the architecture, so the decision stays ACCEPTED.
 - **Promotions are environment-bound.** The independent final review (MI-1) found that Medusa evaluates every active automatic promotion against every cart platform-wide. A Petya automatic promotion appeared on Maria carts and blocked Maria checkout; no cross-tenant order was created, because the completion hook rejected it. Now:
   - claiming a promotion binds it with a `store_environment_id` rule;
-  - cart promotion evaluation receives that attribute derived server-side from the cart's owner, never from sales channels;
+  - cart promotion evaluation receives that attribute derived server-side from the cart's ownership record (while a cart is being created, from the ownership record of its sales channel; channel visibility is never used);
   - unbound automatic promotions are rejected at create/update (RT05, RT06).
 
   The same review's minors are also closed: encoded `/auth/customer` paths, a foreign `cart_id` on product routes, and misconfigured shipping options (RT07). This is the same architecture, so the decision stays ACCEPTED.
@@ -139,7 +139,8 @@ These follow from the evidence. Breaking any of them re-opens this decision.
 - Operators on `/admin` can act across tenants. This needs an audit trail before production.
 - Future Medusa versions may change workflow shapes. This is mitigated by §5.7 and the tripwires.
 - The response guard's ownership assertions cover products, carts, orders and shipping options. Extend them as routes are enabled.
-- Promotion-rule batch/delete workflows have no Medusa hooks. They are operator-only; completion fails closed if an environment rule is removed.
+- Promotion-rule batch/create/update/delete workflows have no Medusa hooks and are operator-only. If an operator removes a promotion's environment rule, that promotion is evaluated for other stores' carts. Its code and discount appear on their carts, and their later cart updates and checkout fail closed with an isolation violation. A later milestone should hook or wrap these workflows with `assertPromotionsSafelyScoped` before operator promotion tooling grows.
+- Promotions that are environment-bound but never claimed, whether created through the operator `/admin` API or directly through the module, block the bound store's cart updates and checkout until provisioning claims them. Provisioning should delete promotions whose claim fails, and operator promotion creation should claim in the same flow.
 - An automatic promotion created directly through the promotion module and never claimed would be evaluated for every cart. Checkout fails closed until it is bound. Only trusted server code can do this.
 
 ## 8. Surfaces not yet testable

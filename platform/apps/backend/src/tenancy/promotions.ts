@@ -5,8 +5,9 @@
  * platform, and a promotion without rules matches everything. Code checks alone
  * therefore cannot isolate promotions. Every tenant promotion carries exactly
  * one rule `store_environment_id eq <owner>`, and the cart promotion context is
- * set server-side from the cart's owner (see workflows/hooks/tenancy-promotions.ts).
- * Sales channels play no part in this.
+ * set server-side from the cart's ownership record (see workflows/hooks/tenancy-promotions.ts).
+ * While a cart is being created, the owner of its sales channel's ownership record
+ * is used; sales-channel visibility is never consulted.
  */
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { MedusaError, Modules } from "@medusajs/framework/utils"

@@ -143,7 +143,8 @@ There are two independent layers.
 - **Operators cross all tenants.** Platform operators on `/admin` are outside the tenant boundary by design. Operator audit is future work.
 - **One environment per user.** Multi-environment membership needs a server-side session binding with a membership check. It must never become a client `store_environment_id`.
 - **Response guard coverage.** Ownership assertions cover products, carts, orders and shipping options. The customer-field strip removes every key named `customer`/`customer_id` in storefront responses, so future payment-provider session data must not depend on those key names.
-- **Promotion rule edits below the tenant layer.** Medusa's promotion-rule batch/delete workflows have no hooks. They are reachable only by platform operators (`/admin`); merchant promotion management must go through a tenant service. If an environment rule were removed, completion still fails closed (unowned or foreign promotion on the cart).
+- **Promotion rule edits below the tenant layer.** Medusa's promotion-rule batch/create/update/delete workflows have no hooks. They are reachable only by platform operators (`/admin`); merchant promotion management must go through a tenant service. If an operator removed an environment rule, that promotion would appear on other stores' carts, and their cart updates and checkout would fail closed. Hook or wrap these workflows before operator promotion tooling grows.
+- **Bound but unclaimed promotions** (operator `/admin` or direct module creation) block the bound store's cart updates and checkout until claimed. Provisioning should delete promotions whose claim fails.
 - **Automatic promotions created directly through the promotion module** (bypassing workflows) and never claimed would be evaluated for every cart. Checkout then fails closed until provisioning binds them. Only trusted server code can do this.
 
 ## 12. Invariants later milestones must test

@@ -4,7 +4,7 @@
 Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules can enforce StoreEnvironment isolation per SCOPE_LEVEL_3 §1/§9 and ADR-003/004/014. The outcome is a binary decision in docs/MEDUSA_TENANCY_DECISION.md.
 
 ## Result
-**M0: PASS. Medusa decision ACCEPTED**, conditional on the binding constraints in the decision doc §5. The independent final review of b549864 returned MATERIAL_ISSUE (MI-1, automatic promotions). It is fixed and awaiting a repeat independent final review. M1 has not been started.
+**M0: PASS. Medusa decision ACCEPTED**, conditional on the binding constraints in the decision doc §5. The independent final review of b549864 returned MATERIAL_ISSUE (MI-1, automatic promotions). That was fixed in db6ed9e, and the repeat independent final review of db6ed9e returned ACCEPTED with no material issues. Next: merge PR #1, tag `m0-accepted`, start M1 on its own mission branch.
 
 ## Implementation approach (final)
 - **Backend.** `platform/apps/backend` is a standalone Medusa 2.21.0 app with the admin UI disabled. It uses a local Docker Postgres container, `m0-medusa-postgres`, on localhost:55432 (postgres/postgres, disposable).
@@ -53,10 +53,10 @@ Evidence is in baseline-observations.json.
   - Workflows imported into Jest modules run without the app's hooks, so tests use the workflow engine by id.
 
 ## Remaining work
-Push the MI-1 fix, then repeat the independent final review of the new head. If ACCEPTED, the user's plan is: merge PR #1, tag M0, then start M1 on a new mission branch.
+None. Operator-only promotion notes from the final review are tracked in docs/MEDUSA_TENANCY_DECISION.md §7.
 
 ## Blocker
 None.
 
 ## Next intended action
-Repeat the final review. Do not begin M1 before an ACCEPTED review and the merge.
+M0 closed: merge PR #1 into main, tag `m0-accepted`, then start M1 on `mission/m1-storefront-project`.
