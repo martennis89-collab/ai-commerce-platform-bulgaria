@@ -1,8 +1,22 @@
 # M1 — StoreEnvironment + StorefrontProject shell — STATE
 
 ## Status
-**Implementation complete; acceptance criteria met by automated tests. Pending independent M1 review.**
-- Branch: `mission/m1-storefront-project`, created from `main` @ `000e72a` (the M0 merge, tagged `m0-accepted`). Local only; not pushed.
+**Independent review round 1 fixes applied; pending repeat independent review.**
+- Branch: `mission/m1-storefront-project`, created from `main` @ `000e72a` (the M0 merge, tagged `m0-accepted`). Pushed; draft PR #2 into `main`.
+
+## Independent review
+- **Round 1, at `3cad636`: MATERIAL_ISSUE.** The reviewer reproduced 119/56/4/6. Isolation held under every attack.
+  - **M1-R1 (material).** No runnable preview gateway existed outside tests, so preview URLs were dead.
+  - **Minor.** N1 orphan Organization on rollback or race; N2 gateway followed junctions; N3 an older deployment finishing later replaced a newer one; N4 a revoked key did not stop the preview; N5 raw build errors were visible to merchants.
+- **Fixes.**
+  - R1: `startPreviewGateway`, `src/scripts/preview-gateway.ts` and `npm run preview:gateway`.
+  - N1: organization rollback step plus hostname uniqueness validation.
+  - N2: real-path containment in the gateway.
+  - N3: the newest ready deployment wins.
+  - N4: a revoked key stops the preview.
+  - N5: merchants see a generic error.
+  - `docs/STOREFRONT.md` updated to match.
+- **Verification after fixes (2026-09-14).** Packages build and tsc clean; unit 123/123; integration 61/61 (43 M0 + 18 M1); E2E 4/4; baseline 6/6; 194 tests in total.
 - Model: `claude-opus-5`, high.
 
 ## Approved decisions
@@ -27,13 +41,13 @@ A trusted server flow that:
 | M0 suites pass unchanged | Met (53/43/6) |
 | Docs updated | Met: `docs/STOREFRONT.md` (new), `docs/TENANCY.md` §12, `ARCHITECTURE.md`, `DECISIONS.md` ADR-015 to ADR-019, `TESTS.json` |
 
-## Final verified run (2026-09-14)
+## Final verified run (2026-09-14, after review round 1 fixes)
 - Packages build: PASS. Typecheck: clean.
-- Unit: 119/119 (53 M0 + 66 M1).
-- Integration: 56/56 (43 M0 + 13 M1).
+- Unit: 123/123 (53 M0 + 70 M1).
+- Integration: 61/61 (43 M0 + 18 M1).
 - E2E: 4/4 (real `next build` static exports served through the preview gateway).
 - Baseline: 6/6.
-- Total: 185 automated tests.
+- Total: 194 automated tests.
 
 ## Implementation
 - **Packages.**
@@ -64,8 +78,8 @@ See `docs/STOREFRONT.md` §8:
 - minimal config.
 
 ## Remaining
-- Independent M1 review (recommended, as for M0).
-- Push the branch, open a PR, merge and tag: user decision.
+- Repeat independent M1 review of the new head.
+- Merge PR #2 and tag M1: user decision after an ACCEPTED review.
 
 ## Blocker
 None.

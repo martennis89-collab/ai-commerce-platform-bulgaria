@@ -8,13 +8,16 @@ import type StorefrontModuleService from "../modules/storefront/service"
 import { requestPreviewDeployment } from "../storefront/deployments"
 import { ExecutionContext, requirePermission } from "./context"
 
+/** Raw build/provider errors (paths, backend URLs, build output) stay operator-side. */
+const MERCHANT_DEPLOYMENT_ERROR = "Deployment failed"
+
 const safeDeployment = (d: any) => ({
   id: d.id,
   target: d.target,
   status: d.status,
   core_version: d.core_version,
   url: d.url ?? null,
-  error: d.error ?? null,
+  error: d.status === "failed" ? MERCHANT_DEPLOYMENT_ERROR : null,
   created_at: d.created_at,
   finished_at: d.finished_at ?? null,
 })

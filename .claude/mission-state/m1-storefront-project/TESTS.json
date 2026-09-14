@@ -1,6 +1,6 @@
 {
   "mission": "m1-storefront-project",
-  "status": "COMPLETE_PENDING_REVIEW",
+  "status": "REVIEW_FIXES_APPLIED_PENDING_REPEAT_REVIEW",
   "commands": {
     "packages": "npm run build:packages (platform/)",
     "typecheck": "npm run typecheck (platform/apps/backend)",
@@ -13,16 +13,16 @@
   "regression_gate": {
     "requirement": "M0 suites stay green after the workspace conversion and M1 changes",
     "status": "PASS",
-    "evidence": "Full test:m1 run 2026-09-14: M0 unit 53/53, M0 integration 43/43, baseline 6/6 all green alongside M1"
+    "evidence": "Full sequential run after review fixes (2026-09-14): M0 unit 53/53, M0 integration 43/43, baseline 6/6"
   },
   "suite_results": {
     "packages_build": "PASS (npm run build:packages from platform/)",
     "typecheck": "PASS (tsc --noEmit, 0 errors)",
-    "unit_all": "PASS 119/119 (53 M0 + 66 M1: platform-config, storefront-contracts, local-deploy/gateway, harness)",
-    "integration_all": "PASS 56/56 (M0 43 + M1 13, dry-run provider)",
+    "unit_all": "PASS 123/123 (53 M0 + 70 M1: platform-config, storefront-contracts, local-deploy/gateway, gateway-hardening, harness)",
+    "integration_all": "PASS 61/61 (M0 43 + M1 18, dry-run provider)",
     "e2e_m1": "PASS 4/4 (local provider, 4 real next build static exports, preview gateway)",
     "baseline_m0": "PASS 6/6",
-    "total_automated_tests": 185
+    "total_automated_tests": 194
   },
   "tests": [
     {
@@ -102,7 +102,47 @@
       "requirement": "No shared multi-tenant storefront runtime: per-deployment artifacts, one environment per hostname, the gateway serves static artifacts only, the harness takes exactly one manifest",
       "status": "PASS",
       "evidence": "M1-T07 (integration: unique artifacts, one environment per hostname), local-deploy.unit.spec.ts gateway suite (host routing, traversal, 404/405), harness.unit.spec.ts (harness exits 2 without exactly one manifest)"
+    },
+    {
+      "id": "M1-R1",
+      "requirement": "The preview gateway has a runnable entry point that serves ready deployments resolved from the database on the port used in preview URLs",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review round 1 MATERIAL_ISSUE (only tests started a gateway). Fixed: startPreviewGateway + src/scripts/preview-gateway.ts + `npm run preview:gateway`; integration M1-R1 serves Maria's ready deployment via startPreviewGateway and 404s Petya/live hosts; gateway-hardening.unit.spec.ts checks the script, npm script and port"
+    },
+    {
+      "id": "M1-N1",
+      "requirement": "Hostname collisions and concurrent same-handle creation leave no orphan organization or duplicate bindings",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N1 (orphan Organization). Fixed: organization is its own compensating step; validation checks live/preview hostname uniqueness. Integration M1-N1 (collision + 3 concurrent creates: exactly one environment, org, channel, key)"
+    },
+    {
+      "id": "M1-N2",
+      "requirement": "The gateway never follows symlinks/junctions out of an artifact or serves an artifact directory resolving outside the deploy root",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N2. Fixed: real-path containment. gateway-hardening.unit.spec.ts (junction inside artifact and junction artifact_ref both 404)"
+    },
+    {
+      "id": "M1-N3",
+      "requirement": "An older deployment finishing after a newer one never replaces it; exactly one ready deployment per project/target",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N3. Fixed: mark ready, then keep only the newest ready (time-ordered ids); resolver picks newest. Integration M1-N3"
+    },
+    {
+      "id": "M1-N4",
+      "requirement": "Revoking a project's publishable key stops its preview being served",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N4. Fixed in resolvePreviewRoute. Integration M1-N4"
+    },
+    {
+      "id": "M1-N5",
+      "requirement": "Merchants see only a generic deployment error; raw build/manifest detail and backend URLs stay operator-side",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N5. Fixed in merchant-storefront.ts. Integration M1-N5"
     }
   ],
-  "last_full_run": "2026-09-14"
+  "last_full_run": "2026-09-14",
+  "independent_review": {
+    "round_1": "MATERIAL_ISSUE at 3cad636: M1-R1 preview gateway had no runnable entry point (preview URLs were dead outside tests); minor N1-N5. Suites reproduced 119/56/4/6.",
+    "fixes": "startPreviewGateway + `npm run preview:gateway` (R1); organization rollback step and hostname uniqueness validation (N1); real-path containment in gateway (N2); newest ready deployment wins (N3); revoked publishable key stops preview (N4); generic merchant deployment error (N5)"
+  }
 }

@@ -1,7 +1,8 @@
 /**
- * Storefront deployment lifecycle: queued → building → ready | failed, with a
- * new ready deployment superseding the previous ready one of the same target.
- * Durable, resumable execution arrives with M2; M1 executes from the
+ * Storefront deployment lifecycle: queued → building → ready | failed | superseded.
+ * At most one deployment per project and target stays `ready`: the newest one
+ * (Medusa ids are time-ordered ULIDs), even when an older deployment finishes
+ * later. Durable, resumable execution arrives with M2; M1 executes from the
  * `storefront.deployment.queued` subscriber.
  */
 import type { MedusaContainer } from "@medusajs/framework/types"
@@ -52,14 +53,6 @@ export async function executeDeployment(container: MedusaContainer, deploymentId
     await storefront.updateDeployments({ id: deploymentId, manifest } as any)
     const provider = getDeployProvider(deployment.provider)
     const result = await provider.deploy(manifest)
-    const previous = (await storefront.listDeployments({
-      project_id: deployment.project_id,
-      target: deployment.target,
-      status: "ready",
-    })) as any[]
-    if (previous.length) {
-      await storefront.updateDeployments(previous.map((p) => ({ id: p.id, status: "superseded" })) as any)
-    }
     await storefront.updateDeployments({
       id: deploymentId,
       status: "ready",
@@ -68,6 +61,7 @@ export async function executeDeployment(container: MedusaContainer, deploymentId
       error: null,
       finished_at: new Date(),
     } as any)
+    await settleReadyDeployments(storefront, deployment.project_id, deployment.target)
   } catch (e: any) {
     await storefront.updateDeployments({
       id: deploymentId,
@@ -77,4 +71,16 @@ export async function executeDeployment(container: MedusaContainer, deploymentId
     } as any)
   }
   return load()
+}
+
+/** Keeps only the newest ready deployment of a project/target; every older ready one is superseded. */
+async function settleReadyDeployments(storefront: StorefrontModuleService, projectId: string, target: string) {
+  const ready = (await storefront.listDeployments(
+    { project_id: projectId, target, status: "ready" } as any,
+    { order: { id: "DESC" }, take: null }
+  )) as any[]
+  const [, ...older] = ready
+  if (older.length) {
+    await storefront.updateDeployments(older.map((d) => ({ id: d.id, status: "superseded" })) as any)
+  }
 }

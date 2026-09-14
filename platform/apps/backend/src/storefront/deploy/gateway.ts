@@ -2,22 +2,30 @@
  * Local preview gateway: a host-routed STATIC file server for ready preview
  * deployments. It contains no storefront code and renders nothing itself; each
  * hostname maps to exactly one per-deployment artifact directory, resolved from
- * the database on every request (so suspension or a new deployment takes effect
- * immediately). Unknown, look-alike, live or suspended hosts get 404.
+ * the database on every request (so suspension, key revocation or a new
+ * deployment takes effect immediately). Unknown, look-alike, live or suspended
+ * hosts get 404.
+ *
+ * Run it locally with `npm run preview:gateway` (src/scripts/preview-gateway.ts).
  */
 import fs from "fs"
 import http from "http"
 import path from "path"
 import type { MedusaContainer } from "@medusajs/framework/types"
+import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
 import { STOREFRONT_MODULE } from "../../modules/storefront"
 import type StorefrontModuleService from "../../modules/storefront/service"
 import { TENANCY_MODULE } from "../../modules/tenancy"
 import type TenancyModuleService from "../../modules/tenancy/service"
 import { normalizeHostname } from "../../tenancy/hostname"
+import { localDeployRoot, previewGatewayPort } from "../platform-config"
 
 export type PreviewRoute = { hostname: string; deployment_id: string; artifact_ref: string }
 
-/** Exact preview hostname → latest ready preview deployment of an active project in an active environment. */
+/**
+ * Exact preview hostname → newest ready preview deployment of an active project
+ * in an active environment whose publishable key is still valid.
+ */
 export async function resolvePreviewRoute(
   container: MedusaContainer,
   rawHost: string | undefined
@@ -42,9 +50,18 @@ export async function resolvePreviewRoute(
   if (!env) {
     return null
   }
+  const { data: keys } = await container.resolve(ContainerRegistrationKeys.QUERY).graph({
+    entity: "api_key",
+    fields: ["id", "revoked_at"],
+    filters: { id: project.publishable_api_key_id },
+  })
+  const key: any = keys[0]
+  if (!key || (key.revoked_at && new Date(key.revoked_at) <= new Date())) {
+    return null
+  }
   const [deployment] = (await storefront.listDeployments(
     { project_id: project.id, target: "preview", status: "ready" },
-    { order: { finished_at: "DESC" }, take: 1 }
+    { order: { id: "DESC" }, take: 1 }
   )) as any[]
   if (
     !deployment?.artifact_ref ||
@@ -76,6 +93,14 @@ export function isInside(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
 }
 
+function realpathOrNull(p: string): string | null {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return null
+  }
+}
+
 function send(res: http.ServerResponse, status: number, body = "") {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" })
   res.end(body || http.STATUS_CODES[status])
@@ -95,8 +120,10 @@ export function createPreviewGateway(options: {
       if (!route) {
         return send(res, 404)
       }
-      const artifactDir = path.resolve(deployRoot, route.artifact_ref)
-      if (!isInside(deployRoot, artifactDir) || !fs.existsSync(artifactDir)) {
+      // Containment is checked on real paths, so symlinks/junctions cannot escape.
+      const realRoot = realpathOrNull(deployRoot)
+      const realArtifact = realpathOrNull(path.resolve(deployRoot, route.artifact_ref))
+      if (!realRoot || !realArtifact || !isInside(realRoot, realArtifact) || realArtifact === realRoot) {
         return send(res, 404)
       }
       let pathname: string
@@ -108,24 +135,25 @@ export function createPreviewGateway(options: {
       if (pathname.includes("\0")) {
         return send(res, 400)
       }
-      let file = path.resolve(artifactDir, `.${pathname}`)
-      if (!isInside(artifactDir, file)) {
+      let file = path.resolve(realArtifact, `.${pathname}`)
+      if (!isInside(realArtifact, file)) {
         return send(res, 404)
       }
       if (fs.existsSync(file) && fs.statSync(file).isDirectory()) {
         file = path.join(file, "index.html")
       }
       let status = 200
-      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
-        const notFound = path.join(artifactDir, "404.html")
-        if (!fs.existsSync(notFound)) {
+      let realFile = fs.existsSync(file) && fs.statSync(file).isFile() ? realpathOrNull(file) : null
+      if (!realFile || !isInside(realArtifact, realFile)) {
+        const notFound = realpathOrNull(path.join(realArtifact, "404.html"))
+        if (!notFound || !isInside(realArtifact, notFound)) {
           return send(res, 404)
         }
-        file = notFound
+        realFile = notFound
         status = 404
       }
       res.writeHead(status, {
-        "content-type": CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "application/octet-stream",
+        "content-type": CONTENT_TYPES[path.extname(realFile).toLowerCase()] ?? "application/octet-stream",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
         "x-platform-deployment": route.deployment_id,
@@ -133,7 +161,7 @@ export function createPreviewGateway(options: {
       if (req.method === "HEAD") {
         return res.end()
       }
-      fs.createReadStream(file).pipe(res)
+      fs.createReadStream(realFile).pipe(res)
     } catch {
       if (!res.headersSent) {
         send(res, 500)
@@ -142,4 +170,24 @@ export function createPreviewGateway(options: {
       }
     }
   })
+}
+
+/** The runnable local gateway: DB-resolved routes over the local deploy root, loopback by default. */
+export async function startPreviewGateway(
+  container: MedusaContainer,
+  options: { port?: number; host?: string; deployRoot?: string } = {}
+): Promise<http.Server> {
+  const server = createPreviewGateway({
+    deployRoot: options.deployRoot ?? localDeployRoot(),
+    resolveRoute: (host) => resolvePreviewRoute(container, host),
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(
+      options.port ?? previewGatewayPort(),
+      options.host ?? process.env.PREVIEW_GATEWAY_HOST ?? "127.0.0.1",
+      () => resolve()
+    )
+  })
+  return server
 }

@@ -13,7 +13,13 @@ import { registerPlatformOperator } from "../../src/tenancy/provisioning"
 import { buildMerchantExecutionContext } from "../../src/tenancy/context"
 import { executeTenantTool, MERCHANT_TOOLS } from "../../src/tenancy/tools"
 import { buildDeploymentManifest } from "../../src/storefront/manifest"
-import { resolvePreviewRoute } from "../../src/storefront/deploy/gateway"
+import fs from "fs"
+import http from "http"
+import os from "os"
+import path from "path"
+import { resolvePreviewRoute, startPreviewGateway } from "../../src/storefront/deploy/gateway"
+import { executeDeployment } from "../../src/storefront/deployments"
+import { provisionStoreEnvironment } from "../../src/tenancy/provisioning"
 
 jest.setTimeout(10 * 60 * 1000)
 
@@ -324,6 +330,110 @@ medusaIntegrationTestRunner({
           hostsToEnvs.set(d.hostname, (hostsToEnvs.get(d.hostname) ?? new Set()).add(d.store_environment_id))
         }
         expect([...hostsToEnvs.values()].every((s) => s.size === 1)).toBe(true)
+      })
+    })
+
+    describe("independent review hardening", () => {
+      it("M1-R1 the runnable gateway entry point serves a ready deployment resolved from the database", async () => {
+        const container = getContainer()
+        const [ready] = await storefront().listDeployments({ project_id: maria.projectId, status: "ready" })
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "m1-r1-"))
+        fs.mkdirSync(path.join(root, ready.artifact_ref), { recursive: true })
+        fs.writeFileSync(path.join(root, ready.artifact_ref, "index.html"), "<h1>Maria Candles preview</h1>")
+        const server = await startPreviewGateway(container, { port: 0, host: "127.0.0.1", deployRoot: root })
+        try {
+          const port = (server.address() as any).port
+          const fetchHost = (host: string) =>
+            new Promise<{ status: number; body: string }>((resolve, reject) => {
+              const req = http.request({ host: "127.0.0.1", port, path: "/", headers: { host } }, (res) => {
+                let body = ""
+                res.on("data", (c) => (body += c))
+                res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+              })
+              req.on("error", reject)
+              req.end()
+            })
+          expect(await fetchHost("maria-candles.preview.shops.test")).toMatchObject({ status: 200, body: "<h1>Maria Candles preview</h1>" })
+          expect((await fetchHost("petya-jewellery.preview.shops.test")).status).toBe(404)
+          expect((await fetchHost("maria-candles.shops.test")).status).toBe(404)
+        } finally {
+          await new Promise<void>((r) => server.close(() => r()))
+        }
+      })
+
+      it("M1-N1 hostname collisions and concurrent creation leave no orphan organizations", async () => {
+        const orgsNamed = async (name: string) => (await tenancy().listOrganizations({ name })).length
+        await provisionStoreEnvironment(getContainer(), {
+          organizationName: "Pre Org",
+          handle: "pre-existing",
+          name: "Pre",
+          hostname: "collide-store.shops.test",
+        })
+        const collide = await call(
+          api.post("/admin/platform/store-environments", { handle: "collide-store", name: "Collide Store" }, bearer(operatorToken))
+        )
+        expect(collide.status).toBeGreaterThanOrEqual(400)
+        expect(await orgsNamed("Collide Store")).toBe(0)
+
+        const results = await Promise.all(
+          [1, 2, 3].map(() =>
+            call(api.post("/admin/platform/store-environments", { handle: "race-store", name: "Race Store" }, bearer(operatorToken)))
+          )
+        )
+        expect(results.filter((r) => r.status === 201)).toHaveLength(1)
+        expect(await tenancy().listStoreEnvironments({ handle: "race-store" })).toHaveLength(1)
+        expect(await orgsNamed("Race Store")).toBe(1)
+        expect(await getContainer().resolve(Modules.SALES_CHANNEL).listSalesChannels({ name: "Race Store Storefront" })).toHaveLength(1)
+        expect(await getContainer().resolve(Modules.API_KEY).listApiKeys({ title: "Race Store storefront key" })).toHaveLength(1)
+      })
+
+      it("M1-N3 an older deployment that finishes later never replaces a newer ready one", async () => {
+        const container = getContainer()
+        const project = await projectOf(maria)
+        const row = () =>
+          storefront().createDeployments({
+            project_id: project.id,
+            store_environment_id: maria.envId,
+            target: "preview",
+            status: "queued",
+            provider: "dry-run",
+            core_version: STOREFRONT_CORE_VERSION,
+            hostname: project.preview_hostname,
+          })
+        const older = await row()
+        const newer = await row()
+        expect(newer.id > older.id).toBe(true)
+        await executeDeployment(container, newer.id)
+        await executeDeployment(container, older.id)
+        const [o] = await storefront().listDeployments({ id: older.id })
+        const [n] = await storefront().listDeployments({ id: newer.id })
+        expect({ older: o.status, newer: n.status }).toEqual({ older: "superseded", newer: "ready" })
+        expect(await storefront().listDeployments({ project_id: project.id, status: "ready" })).toHaveLength(1)
+        expect((await resolvePreviewRoute(container, project.preview_hostname))?.deployment_id).toBe(newer.id)
+      })
+
+      it("M1-N4 revoking the project's publishable key stops its preview being served", async () => {
+        const container = getContainer()
+        const project = await projectOf(maria)
+        await container.resolve(Modules.API_KEY).revoke(project.publishable_api_key_id, { revoked_by: "test", revoke_in: 0 } as any)
+        expect(await resolvePreviewRoute(container, "maria-candles.preview.shops.test")).toBeNull()
+        expect(await resolvePreviewRoute(container, "petya-jewellery.preview.shops.test")).not.toBeNull()
+      })
+
+      it("M1-N5 merchants see a generic deployment error; raw build detail stays operator-side", async () => {
+        const project = await projectOf(maria)
+        await storefront().updateStorefrontProjects({ id: project.id, core_version: "9.9.9" })
+        const res = await api.post("/merchant/storefront/preview-deployments", {}, bearer(maria.token))
+        const done = await waitForDeployment(res.data.deployment.id)
+        expect(done.error).toMatch(/core_version 9\.9\.9/)
+        const view = await api.get("/merchant/storefront", bearer(maria.token))
+        const failed = view.data.storefront.deployments.find((d: any) => d.id === done.id)
+        expect(failed).toMatchObject({ status: "failed", error: "Deployment failed" })
+        // The pinned core_version is legitimately visible; the raw manifest/build error text is not.
+        const body = JSON.stringify(view.data)
+        expect(body).not.toContain("Invalid deployment manifest")
+        expect(body).not.toContain("is not available")
+        expect(body).not.toContain(BACKEND_URL)
       })
     })
   },

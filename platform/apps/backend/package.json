@@ -6,6 +6,7 @@
   "scripts": {
     "build": "medusa build",
     "dev": "medusa develop",
+    "preview:gateway": "medusa exec ./src/scripts/preview-gateway.ts",
     "typecheck": "tsc --noEmit",
     "test:unit": "cross-env TEST_TYPE=unit NODE_OPTIONS=--experimental-vm-modules jest --silent --runInBand --forceExit",
     "test:integration:http": "cross-env TEST_TYPE=integration:http NODE_OPTIONS=--experimental-vm-modules jest --silent=false --runInBand --forceExit",

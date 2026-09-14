@@ -1,6 +1,6 @@
 # Storefront Projects
 
-Status: implemented in M1 (`mission/m1-storefront-project`).
+Status: implemented in M1 (`mission/m1-storefront-project`), hardened after the independent M1 review.
 Normative sources: `SCOPE_LEVEL_3_LOCKED.md` §2–§4, ADR-006, ADR-007, ADR-016, ADR-017, ADR-018, ADR-019. Tenancy rules are in `docs/TENANCY.md`.
 
 ## 1. Model
@@ -9,19 +9,20 @@ Normative sources: `SCOPE_LEVEL_3_LOCKED.md` §2–§4, ADR-006, ADR-007, ADR-01
 |---|---|---|---|
 | `StoreEnvironment` | `tenancy` module (M0) | `handle`, live `hostname`, `status` | The tenant trust boundary. |
 | `StorefrontProject` | `storefront` module | `store_environment_id` (unique), `handle` (unique), `core_version`, `deployment_provider`, `repository_ref`, `publishable_api_key_id`, `preview_hostname` / `live_hostname` (unique), `config` (draft), `active_theme`, `status` | Exactly one project per environment. It is pinned to a `storefront-core` version. |
-| `Deployment` | `storefront` module | `project`, `store_environment_id`, `target` (`preview`/`live`), `status`, `provider`, `core_version`, `hostname`, `manifest` snapshot, `artifact_ref`, `url`, `error` | Status runs `queued → building → ready | failed`. A new ready deployment supersedes the previous ready one of the same target. |
+| `Deployment` | `storefront` module | `project`, `store_environment_id`, `target` (`preview`/`live`), `status`, `provider`, `core_version`, `hostname`, `manifest` snapshot, `artifact_ref`, `url`, `error` | Status runs `queued → building → ready | failed | superseded`. Only the **newest** ready deployment of a project and target stays ready, even when an older deployment finishes later. |
 
 ## 2. Creation flow
 
-`platform-create-store-environment` (`src/workflows/storefront/create-store-environment.ts`) is a trusted workflow. The operator reaches it via `POST /admin/platform/store-environments`; M2 generation will reach it too. It runs these steps, and every one of them compensates:
+`platform-create-store-environment` (`src/workflows/storefront/create-store-environment.ts`) is a trusted workflow. The operator reaches it via `POST /admin/platform/store-environments`; M2 generation will reach it too. Every step that creates a record compensates, so a failure at any position leaves nothing behind. That includes losing a uniqueness race against a concurrent request.
 
-1. **Validate.** The handle is 3–40 characters (`[a-z0-9-]`, no `--`, not reserved), the name is 1–80 characters, and the handle is unique. The owner user must exist.
-2. **Environment.** Create the `Organization` and `StoreEnvironment`, with live hostname `<handle>.<platform-domain>`.
-3. **Commerce bindings.** Create the sales channel and the publishable key, and link them. Create the stock location and link it to the channel. The publishable-key step revokes, then deletes, on rollback: Medusa's own step cannot delete an unrevoked key.
-4. **Ownership.** Claim the sales channel, key and stock location for the environment (M0 registry).
-5. **Project.** Create the `StorefrontProject` with the default validated config, the pinned core version and both hostnames.
-6. **Membership.** Add the owner membership when an owner is given. The unique index on user is the authority.
-7. **First deployment.** Queue a preview deployment and emit `storefront.deployment.queued`.
+1. **Validate.** The handle is 3–40 characters (`[a-z0-9-]`, no `--`, not reserved), and the name is 1–80 characters. Both the handle and the derived live and preview hostnames must be unused by any environment or project. The owner user must exist.
+2. **Organization.** Created in its own step.
+3. **StoreEnvironment.** Live hostname `<handle>.<platform-domain>`. The database unique indexes on handle and hostname are the authority under concurrency.
+4. **Commerce bindings.** Create the sales channel and the publishable key, and link them. Create the stock location and link it to the channel. The publishable-key step revokes, then deletes, on rollback: Medusa's own step cannot delete an unrevoked key.
+5. **Ownership.** Claim the sales channel, key and stock location for the environment (M0 registry).
+6. **Project.** Create the `StorefrontProject` with the default validated config, the pinned core version and both hostnames.
+7. **Membership.** Add the owner membership when an owner is given. The unique index on user is the authority.
+8. **First deployment.** Queue a preview deployment and emit `storefront.deployment.queued`.
 
 ## 3. Deployment manifest
 
@@ -50,14 +51,37 @@ The local build child process receives an **allow-list** of OS variables plus `N
 
 The production hosting provider is still open. Any real provider must implement `StorefrontDeployProvider` and preserve the manifest contract.
 
-Selection is by `STOREFRONT_DEPLOY_PROVIDER` (`local` by default), recorded per project and per deployment. Related settings: `STOREFRONT_DEPLOY_ROOT`, `STOREFRONT_BACKEND_URL`, `PLATFORM_BASE_DOMAIN` (default `localhost`), `PREVIEW_GATEWAY_PORT`.
+Selection is by `STOREFRONT_DEPLOY_PROVIDER` (`local` by default), recorded per project and per deployment. Related settings:
+- `STOREFRONT_DEPLOY_ROOT`, `STOREFRONT_BACKEND_URL`, `PLATFORM_BASE_DOMAIN` (default `localhost`);
+- `PREVIEW_GATEWAY_PORT` (default `8787`) and `PREVIEW_GATEWAY_HOST` (default `127.0.0.1`).
 
 ## 5. Preview URLs and the gateway
 
-- Hostnames (ADR-018): preview is `<handle>.preview.<platform-domain>`, live is `<handle>.<platform-domain>`. They are always distinct because handles contain no dots, and `preview` is a reserved handle.
-- `resolvePreviewRoute(container, host)` normalises the host, then requires an exact `preview_hostname` match, an active project, an active environment, and the latest ready preview deployment whose hostname and environment match the project. It resolves from the database on every request, so a suspension or a new deployment takes effect immediately.
-- `createPreviewGateway` is a static file server over per-deployment artifact directories. It rejects anything but `GET`/`HEAD`, blocks path traversal and directories outside the deploy root, and falls back to the artifact's own `404.html`. It contains no storefront code, so it is deployment infrastructure (like a CDN), **not** a multi-tenant storefront runtime.
-- Live hostnames are not served in M1. Publishing to live comes in a later milestone.
+- **Hostnames (ADR-018).** Preview is `<handle>.preview.<platform-domain>`, live is `<handle>.<platform-domain>`. They are always distinct because handles contain no dots, and `preview` is a reserved handle.
+- **Route resolution.** `resolvePreviewRoute(container, host)` requires all of:
+  - an exact normalised `preview_hostname` match;
+  - an active project in an active environment;
+  - the project's publishable key not revoked;
+  - the newest ready preview deployment, with matching hostname and environment.
+
+  It resolves from the database on every request, so suspension, key revocation or a new deployment takes effect immediately.
+- **Serving.** `createPreviewGateway` is a static file server over per-deployment artifact directories:
+  - it allows only `GET`/`HEAD`;
+  - containment is checked on **real paths**, so symlinks or junctions inside an artifact, or an artifact directory resolving outside the deploy root, are never served;
+  - encoded traversal is blocked;
+  - missing paths fall back to the artifact's own `404.html`.
+
+  It contains no storefront code, so it is deployment infrastructure (like a CDN), **not** a multi-tenant storefront runtime.
+- **Live hostnames** are not served in M1. Publishing to live comes in a later milestone.
+
+### Running the local preview gateway
+```bash
+cd platform && npm run build:packages
+cd apps/backend
+npm run dev                 # backend; STOREFRONT_DEPLOY_PROVIDER=local (default)
+npm run preview:gateway     # serves ready previews on http://<handle>.preview.localhost:8787/
+```
+`preview:gateway` runs `src/scripts/preview-gateway.ts` through `medusa exec`, which calls `startPreviewGateway`. Preview URLs stored on deployments use the same `PREVIEW_GATEWAY_PORT`. Browsers resolve `*.localhost` to the loopback address.
 
 ## 6. storefront-core and storefront-schema
 
@@ -73,8 +97,8 @@ Selection is by `STOREFRONT_DEPLOY_PROVIDER` (`local` by default), recorded per 
 | Surface | Route or tool | Rule |
 |---|---|---|
 | Operator | `POST /admin/platform/store-environments` | Strict body (`handle`, `name`, `organization_name?`, `owner_user_id?`); platform operators only (M0 `/admin` guard). |
-| Operator | `POST /admin/platform/store-environments/:id/preview-deployments` | Redeploys that environment's preview. |
-| Merchant | `GET /merchant/storefront` | Returns the caller's own project and deployment summaries. |
+| Operator | `POST /admin/platform/store-environments/:id/preview-deployments` | Redeploys that environment's preview. Full deployment errors are recorded on the `Deployment` row. |
+| Merchant | `GET /merchant/storefront` | Returns the caller's own project and deployment summaries. A failed deployment shows only `"Deployment failed"`; build output, paths and backend URLs stay operator-side. |
 | Merchant | `POST /merchant/storefront/preview-deployments` | The body must be `{}`. Project, environment, key and target are all server-derived; tenant selectors get 400. |
 | Tool | `storefront.request_preview_deployment` (risk 1, `storefront:deploy`) | Takes no arguments. |
 
@@ -83,7 +107,9 @@ Permissions: `owner` has `storefront:read` and `storefront:deploy`; `staff` has 
 ## 8. Known limitations
 
 - **Deployment execution.** It runs from an in-process subscriber. The `queued → building` transition is not atomic, and a restart mid-build leaves a deployment in `building`. Durable, resumable execution arrives with M2 (`AgentRun`/`AgentTask`).
-- **Build timing.** Local builds are sequential per deployment but can run concurrently across projects. There is a 10-minute build timeout; logs go to `builds/<id>/build.log`.
+- **Build timing.** Local builds can run concurrently across projects. There is a 10-minute build timeout; logs go to `builds/<id>/build.log`.
 - **Old artifacts.** Superseded artifacts are not garbage-collected yet.
 - **Build-time catalogue.** The catalogue is read at build time, so catalogue changes need a redeploy until M4/M5 add dynamic reads.
 - **Config coverage.** Only the store name, locale, currency and theme preset exist in config. Pages, sections and theme tokens arrive with M2/M3.
+- **Harness environment.** The dev-only harness (`apps/storefront`) passes the developer's whole environment to `next dev`. Merchant builds always use the local provider's allow-list.
+- **No rate limits.** Nothing limits how many redeploys a merchant can request yet (M11).

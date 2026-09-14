@@ -1,7 +1,8 @@
 /**
  * Trusted platform flow: create a merchant StoreEnvironment, its Medusa
  * commerce bindings, its independent StorefrontProject and a queued preview
- * deployment. Every step compensates, so a failure leaves nothing behind.
+ * deployment. Every step that creates a record compensates, so a failure at any
+ * position (including a lost uniqueness race) leaves nothing behind.
  */
 import {
   createSalesChannelsWorkflow,
@@ -59,10 +60,17 @@ const validateInputStep = createStep(
     const { live, preview } = hostnamesForHandle(handle)
     const tenancy: TenancyModuleService = container.resolve(TENANCY_MODULE)
     const storefront: StorefrontModuleService = container.resolve(STOREFRONT_MODULE)
+    const hosts = [live, preview]
     const [existingEnv] = await tenancy.listStoreEnvironments({ handle })
+    const [hostEnv] = await tenancy.listStoreEnvironments({ hostname: hosts })
     const [existingProject] = await storefront.listStorefrontProjects({ handle })
+    const [previewHostProject] = await storefront.listStorefrontProjects({ preview_hostname: hosts })
+    const [liveHostProject] = await storefront.listStorefrontProjects({ live_hostname: hosts })
     if (existingEnv || existingProject) {
       throw new MedusaError(MedusaError.Types.DUPLICATE_ERROR, "Store handle is already taken")
+    }
+    if (hostEnv || previewHostProject || liveHostProject) {
+      throw new MedusaError(MedusaError.Types.DUPLICATE_ERROR, "Store hostname is already taken")
     }
     if (input.owner_user_id !== undefined) {
       const [user] = await container.resolve(Modules.USER).listUsers({ id: input.owner_user_id })
@@ -83,26 +91,39 @@ const validateInputStep = createStep(
   }
 )
 
-const createEnvironmentStep = createStep(
-  "platform-create-store-environment-record",
+const createOrganizationStep = createStep(
+  "platform-create-organization",
   async (v: Validated, { container }) => {
     const tenancy: TenancyModuleService = container.resolve(TENANCY_MODULE)
     const organization = await tenancy.createOrganizations({ name: v.organization_name })
-    const env = await tenancy.createStoreEnvironments({
-      organization_id: organization.id,
-      handle: v.handle,
-      name: v.name,
-      hostname: v.live_hostname,
-    })
-    return new StepResponse(env, { envId: env.id, organizationId: organization.id })
+    return new StepResponse(organization, organization.id)
   },
-  async (comp, { container }) => {
-    if (!comp) {
-      return
+  async (organizationId, { container }) => {
+    if (organizationId) {
+      const tenancy: TenancyModuleService = container.resolve(TENANCY_MODULE)
+      await tenancy.deleteOrganizations(organizationId)
     }
+  }
+)
+
+const createEnvironmentStep = createStep(
+  "platform-create-store-environment-record",
+  async (input: { v: Validated; organizationId: string }, { container }) => {
     const tenancy: TenancyModuleService = container.resolve(TENANCY_MODULE)
-    await tenancy.deleteStoreEnvironments(comp.envId)
-    await tenancy.deleteOrganizations(comp.organizationId)
+    // Unique indexes on handle and hostname are the authority under concurrency.
+    const env = await tenancy.createStoreEnvironments({
+      organization_id: input.organizationId,
+      handle: input.v.handle,
+      name: input.v.name,
+      hostname: input.v.live_hostname,
+    })
+    return new StepResponse(env, env.id)
+  },
+  async (envId, { container }) => {
+    if (envId) {
+      const tenancy: TenancyModuleService = container.resolve(TENANCY_MODULE)
+      await tenancy.deleteStoreEnvironments(envId)
+    }
   }
 )
 
@@ -223,7 +244,10 @@ export const createStoreEnvironmentWorkflow = createWorkflow(
   "platform-create-store-environment",
   (input: WorkflowData<CreateStoreEnvironmentInput>) => {
     const v = validateInputStep(input)
-    const env = createEnvironmentStep(v)
+    const organization = createOrganizationStep(v)
+    const env = createEnvironmentStep(
+      transform({ v, organization }, ({ v, organization }) => ({ v, organizationId: organization.id }))
+    )
 
     const salesChannels = createSalesChannelsWorkflow.runAsStep({
       input: transform({ v }, ({ v }) => ({ salesChannelsData: [{ name: `${v.name} Storefront` }] })),
