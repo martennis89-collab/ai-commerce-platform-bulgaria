@@ -1,0 +1,59 @@
+{
+  "medusa": "2.21.0",
+  "observations": {
+    "NB01_store_A_get_B_product_by_id": {
+      "status": 404,
+      "message": "Product with id: prod_01M2EKJTX50CA18NXDGQ3BRHR8 was not found",
+      "type": "not_found"
+    },
+    "NB02_store_A_list_contains_B_product": false,
+    "NB03_add_B_variant_managed_inventory_to_A_cart": {
+      "status": 400,
+      "message": "Sales channel sc_01M2EKJTBC7H02JXHQBZ86Y7SB is not associated with any stock location for variant variant_01M2EKJTZ7G14VPQ5FG56ZV0ZZ.",
+      "type": "invalid_data"
+    },
+    "NB04_add_B_variant_unmanaged_inventory_to_A_cart": {
+      "status": 200
+    },
+    "NB05_complete_A_cart_containing_B_variant": {
+      "status": 400,
+      "message": "The cart items require shipping profiles that are not satisfied by the current shipping methods",
+      "type": "invalid_data",
+      "order_sales_channel_is_A": null,
+      "order_contains_B_item": null
+    },
+    "NB06_store_A_key_reads_B_order": {
+      "status": 200,
+      "leaked_B_item": true
+    },
+    "NB13_store_A_key_reads_B_open_cart": {
+      "status": 200
+    },
+    "NB07_store_A_key_mutates_B_cart": {
+      "status": 200
+    },
+    "NB08_move_A_cart_to_B_sales_channel": {
+      "status": 200,
+      "resulting_sales_channel_is_B": true
+    },
+    "NB09_apply_B_promo_code_to_A_cart": {
+      "status": 200,
+      "applied": true
+    },
+    "NB10_attach_B_shipping_option_to_A_cart": {
+      "status": 400,
+      "message": "Shipping Options are invalid for cart.",
+      "type": "invalid_data"
+    },
+    "NB11_same_email_single_global_customer": {
+      "distinct_customer_ids_on_orders": 1,
+      "customer_rows_for_email": 1
+    },
+    "NB12_any_admin_user_lists_both_merchants_orders": {
+      "status": 200,
+      "count": 2
+    },
+    "NB14_second_merchant_reuses_promo_code": "rejected: Promotion with code: PETYA10, already exists.",
+    "NB15_second_region_with_country_bg": "rejected: Countries with codes: \"bg\" are already assigned to a region"
+  }
+}
