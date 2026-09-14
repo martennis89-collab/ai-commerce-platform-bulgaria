@@ -1,0 +1,14 @@
+{
+  "mission": "m1-storefront-project",
+  "status": "BRIEF_DRAFT_AWAITING_APPROVAL",
+  "regression_gate": "M0 suites (unit 53, integration 43, baseline 6) must stay green",
+  "tests": [
+    { "id": "M1-T01", "requirement": "StoreEnvironment + StorefrontProject + Deployment creation is atomic with compensation", "status": "NOT_STARTED" },
+    { "id": "M1-T02", "requirement": "Maria and Petya previews each render only their own store name and products", "status": "NOT_STARTED" },
+    { "id": "M1-T03", "requirement": "Deployment A cannot be configured or rebuilt with environment B's publishable key or data", "status": "NOT_STARTED" },
+    { "id": "M1-T04", "requirement": "Build/deploy configuration contains exactly one publishable key owned by the project's environment", "status": "NOT_STARTED" },
+    { "id": "M1-T05", "requirement": "Preview and live hostnames are distinct; look-alike, unknown and suspended hosts never resolve", "status": "NOT_STARTED" },
+    { "id": "M1-T06", "requirement": "storefront-schema rejects invalid config; storefront-core version pinned per project", "status": "NOT_STARTED" },
+    { "id": "M1-T07", "requirement": "No shared multi-tenant storefront runtime exists", "status": "NOT_STARTED" }
+  ]
+}
