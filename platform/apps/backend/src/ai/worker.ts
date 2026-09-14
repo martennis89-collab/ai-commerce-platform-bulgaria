@@ -151,7 +151,13 @@ function classify(error: any): { retryable: boolean; code: string } {
   if (error instanceof ModelOutputError) return { retryable: false, code: "model_output_rejected" }
   if (error instanceof ToolRejectedError) return { retryable: false, code: "policy_rejected" }
   if (error instanceof LimitReachedError) return { retryable: false, code: "limit_reached" }
-  if (error instanceof MedusaError && error.type === MedusaError.Types.NOT_FOUND) return { retryable: false, code: "policy_rejected" }
+  if (
+    error instanceof MedusaError &&
+    [MedusaError.Types.NOT_FOUND, MedusaError.Types.NOT_ALLOWED, MedusaError.Types.UNAUTHORIZED, MedusaError.Types.FORBIDDEN].includes(error.type as any)
+  ) {
+    // Ownership or permission failures (e.g. the merchant lost access mid-run) never succeed on retry.
+    return { retryable: false, code: "policy_rejected" }
+  }
   return { retryable: true, code: "internal" }
 }
 
@@ -319,6 +325,19 @@ export async function sweepExpired(container: MedusaContainer) {
   }
 }
 
+/** Marks every older, still-active task of the same key in the run as superseded by the given tasks. */
+async function supersedePrevious(container: MedusaContainer, tasks: any[]) {
+  for (const task of tasks) {
+    await sqlRows(
+      container,
+      `UPDATE ai_task SET superseded_by = ?, updated_at = now()
+        WHERE run_id = ? AND task_key = ? AND id <> ? AND superseded_by IS NULL AND deleted_at IS NULL
+          AND created_at <= (SELECT created_at FROM ai_task WHERE id = ?)`,
+      [task.id, task.run_id, task.task_key, task.id, task.id]
+    )
+  }
+}
+
 /**
  * Processes follow-up prompts strictly in order: the next prompt of a run is
  * handled only after every task created by the previous prompt is terminal.
@@ -330,7 +349,9 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
       WHERE q.id IN (
         SELECT p.id FROM ai_prompt_queue p
           JOIN ai_run r ON r.id = p.run_id AND r.deleted_at IS NULL
-         WHERE p.deleted_at IS NULL AND p.status = 'queued'
+         WHERE p.deleted_at IS NULL
+           -- A prompt left 'processing' by a crashed worker is recoverable after one lease period.
+           AND (p.status = 'queued' OR (p.status = 'processing' AND p.updated_at < now() - (? * interval '1 millisecond')))
            AND r.cancel_requested_at IS NULL AND r.pause_requested_at IS NULL
            AND NOT EXISTS (SELECT 1 FROM ai_prompt_queue e WHERE e.run_id = p.run_id AND e.deleted_at IS NULL
                             AND e.sequence < p.sequence AND e.status IN ('queued', 'processing'))
@@ -340,12 +361,28 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
          FOR UPDATE OF p SKIP LOCKED
          LIMIT 5
       )
-      RETURNING q.*`
+      RETURNING q.*`,
+    [aiWorkerConfig().leaseMs]
   )
   const service = ai(container)
   for (const prompt of claimed) {
     try {
       const [run] = (await service.listAgentRuns({ id: prompt.run_id })) as any[]
+      // Idempotent recovery: tasks already created for this prompt are kept, never duplicated.
+      const existing = ((await service.listAgentTasks({ run_id: prompt.run_id }, { take: null })) as any[]).filter(
+        (t) => t.prompt_id === prompt.id
+      )
+      if (existing.length) {
+        await supersedePrevious(container, existing)
+        await sqlRows(
+          container,
+          `UPDATE ai_prompt_queue SET status = 'processed', processed_at = coalesce(processed_at, now()),
+                  result = coalesce(result, ?::jsonb), updated_at = now() WHERE id = ?`,
+          [JSON.stringify({ targets: existing.map((t) => t.task_key), recovered: true }), prompt.id]
+        )
+        await recomputeRun(container, prompt.run_id)
+        continue
+      }
       const reserved = await sqlRows(
         container,
         `UPDATE ai_run SET usage = jsonb_set(coalesce(usage::jsonb, '{}'::jsonb), '{model_calls}',
@@ -366,11 +403,10 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
         schema: FollowUpRouteSchema,
       })
       const targets = [...new Set(route.output.targets)]
-      const all = ((await service.listAgentTasks({ run_id: run.id }, { take: null })) as any[]).filter((t) => !t.superseded_by)
       const dependencies: Record<string, string[]> = { brand: [], catalogue: [], storefront: ["brand"], offers: ["catalogue"] }
-      for (const key of targets) {
-        const previous = all.find((t) => t.task_key === key)
-        const created: any = await service.createAgentTasks({
+      // One batch insert, so a crash leaves either all or none of this prompt's tasks.
+      const created = (await service.createAgentTasks(
+        targets.map((key) => ({
           run_id: run.id,
           store_environment_id: run.store_environment_id,
           task_key: key,
@@ -379,11 +415,9 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
           max_attempts: { ...aiLimits(), ...(run.limits ?? {}) }.maxTaskAttempts,
           instruction: route.output.instruction,
           prompt_id: prompt.id,
-        } as any)
-        if (previous) {
-          await sqlRows(container, `UPDATE ai_task SET superseded_by = ?, updated_at = now() WHERE id = ?`, [created.id, previous.id])
-        }
-      }
+        })) as any
+      )) as any[]
+      await supersedePrevious(container, created)
       await sqlRows(
         container,
         `UPDATE ai_prompt_queue SET status = 'processed', processed_at = now(), result = ?::jsonb, updated_at = now() WHERE id = ?`,

@@ -579,6 +579,22 @@ medusaIntegrationTestRunner({
         expect(all.filter((t) => t.task_key === "brand" && t.superseded_by === fromP1[0].id)).toHaveLength(1)
         expect((await projectConfig(store)).home.hero.subheadline).toContain("акцент върху дегустациите")
 
+        // A worker crashed while routing a follow-up: its task was created but the prompt stayed 'processing'.
+        expect((await call(api.post(`/merchant/ai/runs/${run.id}/prompts`, { prompt: "Добавете оферта за комплект." }, bearer(store.token)))).status).toBe(202)
+        const [p3] = await ai().listPromptQueueItems({ run_id: run.id, sequence: 3 })
+        const [orphan] = await ai().createAgentTasks([
+          { run_id: run.id, store_environment_id: store.envId, task_key: "offers", status: "queued", depends_on: ["catalogue"], max_attempts: 3, instruction: "Оферта за комплект", prompt_id: p3.id },
+        ])
+        await sql(`UPDATE ai_prompt_queue SET status = 'processing', updated_at = now() - interval '1 hour' WHERE id = ?`, [p3.id])
+        const routedBefore = fakeRegistry().calls.filter((c) => c.operation === "followup.route").length
+        expect((await settle(run.id)).status).toBe("completed")
+        const [recovered] = await ai().listPromptQueueItems({ id: p3.id })
+        expect(recovered).toMatchObject({ status: "processed", result: { targets: ["offers"], recovered: true } })
+        expect(fakeRegistry().calls.filter((c) => c.operation === "followup.route").length).toBe(routedBefore)
+        const offers = ((await ai().listAgentTasks({ run_id: run.id, task_key: "offers" }, { take: null })) as any[]).filter((t) => !t.superseded_by)
+        expect(offers.map((t) => [t.id, t.status])).toEqual([[orphan.id, "completed"]])
+        expect((await ai().listAgentTasks({ run_id: run.id }, { take: null }) as any[]).filter((t) => t.prompt_id === p3.id)).toHaveLength(1)
+
         // Cancel before any work: queued tasks are cancelled and never claimed.
         const cancelStore = await createStore("cancel-shop", "Cancel Shop")
         const toCancel = await start(cancelStore)

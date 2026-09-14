@@ -160,7 +160,14 @@ There are two independent layers.
   - Live and preview hostnames are distinct, and preview hosts resolve exactly and only while the environment is active (M1-T05, M1-T05e, M1-T05f).
   - Still to test in M9: a custom domain is bound only after DNS verification, and an unverified domain never resolves.
 - **Caching:** M0 has no cache. Any cache of tenant-sensitive data must include the environment id in the key, and be tested by warming the cache as A and reading as B. Do not enable Medusa's `caching` feature flag without auditing `useCache` keys: `find-or-create-customer` caches by email alone.
-- **Media:** uploaded files get tenant-prefixed keys and ownership records. Test that merchant A cannot list, overwrite or delete B's files, and cannot attach B's file ids to A's products.
-- **AI runs (M2, M3):** `AgentRun`/`AIAction` are environment-owned. Tool inputs never contain tenant selection. Test replaying a run id from another environment.
+- **Media — merchant photo uploads proven in M2** (`docs/AI_EXECUTION.md`, M2-T12, M2-T07, M2-T08):
+  - Files are stored under `<store_environment_id>/<uuid>.<ext>`; the client filename never reaches the key. Type, size and file signature are validated.
+  - Every file is a `media_file` in the ownership registry with a `MediaAsset` row. Listing is per environment, and B's media ids are rejected as not found when starting A's run or attaching to A's products. B's photos cannot be attached to A's drafts, nor A's to B's.
+  - There is no overwrite or delete route yet. Any future one must re-test ownership. Uploaded files are served by URL without authentication; the URL is unguessable but not secret.
+- **AI runs — proven in M2** (M2-T05, T07, T08, T13):
+  - Every `ai_run`, `ai_task`, `ai_prompt_queue`, `ai_action`, `ai_generation`, `ai_business_profile` and `ai_media_asset` row carries the environment. Replaying another environment's run, task or event-stream id through the merchant API returns 404.
+  - AI tool inputs cannot declare tenant keys, and raw arguments are scanned for selectors. Workers rebuild the merchant `ExecutionContext` server-side and refuse any mismatch with the run's environment, including suspended environments.
+  - AI product drafts are claimed, draft-only and invisible to the Store API.
+  - M3 editing must keep these tests and add preview-to-live publishing checks.
 - **Payments, shipping, email (M7, M8):** provider accounts, webhooks and idempotency keys resolve the environment from the owned order or cart, never from the webhook payload's claimed merchant.
 - **Analytics (M6):** events are written with the server-resolved environment. Test that a client-sent environment in the event payload is rejected.

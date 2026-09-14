@@ -3,6 +3,36 @@
 ## Status
 **APPROVED (2026-09-14). Implementing on `mission/m2-durable-generation`. Do not start M3.**
 
+## Progress (2026-09-14, local only, not pushed)
+- **Commits.**
+  - `861ea5b`: foundations, audited AI tools, worker, merchant API.
+  - `80b6543`: deterministic suites, fixes, `docs/AI_EXECUTION.md`, ADR-020.
+- **Verified.**
+  - Unit: 141/141, including 18 AI contract tests.
+  - M2 integration at `80b6543`: 14/14 (M2-T01…T10, T12…T14), including a real `medusa exec` worker SIGKILLed mid-run (M2-T02b).
+  - Backend and test typecheck: clean.
+- **Review round 1** (tenant-isolation-review, security-red-team, durable-agent-review). No cross-tenant finding.
+  - **Fixed after `80b6543` and re-tested** (M2 integration 14/14):
+    - (Medium, durability) A follow-up prompt left `processing` by a crashed worker blocked the run forever, and re-routing could duplicate tasks. Stuck prompts are now reclaimable after one lease period; tasks already created are recovered instead of duplicated. New T04 case.
+    - (Low) Permission and ownership errors raised mid-run were retried; they are now non-retryable.
+  - **Residual risks.**
+    - The price guard accepts any amount the merchant literally wrote, not per product. Drafts still need merchant confirmation.
+    - Uploaded photos are public by unguessable URL before products are published.
+    - No per-merchant cap on concurrent SSE connections (M11 rate limits).
+- **Plan deviations.**
+  - Tool names settled as `brand.apply`, which covers the planned `brand.propose` and `brand.apply_theme`, and `storefront.update_home`, which replaces `storefront.update_config`.
+  - The `storefront.deployment.queued` subscriber stays, but only as an immediate trigger into the leased durable lane.
+- **Full regression (2026-09-14):**
+  - Unit: 141/141.
+  - Integration: 75/75 (M0, M1, M2).
+  - Baseline: 6/6.
+  - E2E: 5/5, including M2-T11 with a real `next build`.
+  - Per-test evidence is in TESTS.json.
+- **Pending.**
+  - Push and open a draft PR (confirm with user).
+  - Independent review and mission-gate-review.
+  - **M2-T15 live Anthropic smoke** (needs the user's `ANTHROPIC_API_KEY`; required before acceptance).
+
 ## User-approved decisions
 - **D1.** Anthropic, behind a swappable provider layer.
   - Model IDs are configurable through env vars.
