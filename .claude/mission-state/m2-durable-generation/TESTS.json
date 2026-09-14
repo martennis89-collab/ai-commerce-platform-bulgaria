@@ -1,0 +1,23 @@
+{
+  "mission": "m2-durable-generation",
+  "status": "BRIEF_DRAFT_AWAITING_APPROVAL",
+  "regression_gate": "M0 (unit 53, integration 43, baseline 6) and M1 (unit 70, integration 18, e2e 4) suites must stay green",
+  "provider_policy": "Deterministic suites use the fake model provider; one opt-in live-provider smoke test runs only when credentials are supplied (B1)",
+  "tests": [
+    { "id": "M2-T01", "requirement": "One authenticated merchant request creates an AgentRun with parallel brand, catalogue-draft, storefront, image and offer tasks; run/task state, current step and progress visible via API and status stream", "status": "NOT_STARTED" },
+    { "id": "M2-T02", "requirement": "Worker killed and restarted mid-run: run resumes via lease expiry; completed tasks and completed tool calls are not repeated (idempotency keys)", "status": "NOT_STARTED" },
+    { "id": "M2-T03", "requirement": "Injected failure in one task leaves other tasks' results intact; retrying the failed task succeeds", "status": "NOT_STARTED" },
+    { "id": "M2-T04", "requirement": "Follow-up prompt during a running run is queued (PromptQueue) and processed in order; cancel and pause transitions behave per state machine", "status": "NOT_STARTED" },
+    { "id": "M2-T05", "requirement": "Every persistent change is a validated tool call with an AIAction audit row (tool, risk, actor, run/task, idempotency key, result)", "status": "NOT_STARTED" },
+    { "id": "M2-T06", "requirement": "Invalid, extra-field or out-of-schema model output is rejected with no side effects", "status": "NOT_STARTED" },
+    { "id": "M2-T07", "requirement": "Runs, tasks, actions, generations and business profiles are StoreEnvironment-owned; Store B run/task ids through Store A merchant API, status stream and tools are not found", "status": "NOT_STARTED" },
+    { "id": "M2-T08", "requirement": "Prompt injection (model output naming store_environment_id or another store's product/project ids) cannot select or touch another store", "status": "NOT_STARTED" },
+    { "id": "M2-T09", "requirement": "AI-generated products are drafts, invisible through the Store API and preview storefront until confirmation; provenance recorded; no invented prices or stock", "status": "NOT_STARTED" },
+    { "id": "M2-T10", "requirement": "Generated storefront config validates against storefront-schema v2; invalid config is rejected", "status": "NOT_STARTED" },
+    { "id": "M2-T11", "requirement": "E2E: generation triggers a real preview deployment that renders the generated brand and sections for its own store only", "status": "NOT_STARTED" },
+    { "id": "M2-T12", "requirement": "Images per D2 decision: tenant-prefixed storage, type/size validation, cross-store file ids rejected (TENANCY §12 media invariant)", "status": "NOT_STARTED" },
+    { "id": "M2-T13", "requirement": "Run budgets (tokens/time/tool calls/concurrency) enforced per D8 defaults", "status": "NOT_STARTED" },
+    { "id": "M2-T14", "requirement": "Preview deployments execute through the durable worker, replacing M1 in-process execution; M1 deployment isolation tests still pass", "status": "NOT_STARTED" },
+    { "id": "M2-T15", "requirement": "Opt-in live-provider smoke: a real model produces valid tool calls for a Bulgarian sample merchant end to end", "status": "NOT_STARTED_REQUIRES_CREDENTIALS" }
+  ]
+}
