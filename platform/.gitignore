@@ -1,0 +1,4 @@
+node_modules/
+.local-deployments*/
+packages/*/dist/
+apps/storefront/.harness/

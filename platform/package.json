@@ -1,0 +1,17 @@
+{
+  "name": "@platform/monorepo",
+  "private": true,
+  "description": "AI commerce platform monorepo (npm workspaces, ADR-019)",
+  "workspaces": [
+    "packages/storefront-schema",
+    "packages/storefront-core",
+    "apps/storefront",
+    "apps/backend"
+  ],
+  "scripts": {
+    "build:packages": "npm run build -w @platform/storefront-schema && npm run build -w @platform/storefront-core",
+    "test:m0": "npm run test:m0 -w @platform/backend",
+    "test:m1": "npm run build:packages && npm run test:m1 -w @platform/backend"
+  },
+  "engines": { "node": ">=20" }
+}

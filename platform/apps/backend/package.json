@@ -10,12 +10,16 @@
     "test:unit": "cross-env TEST_TYPE=unit NODE_OPTIONS=--experimental-vm-modules jest --silent --runInBand --forceExit",
     "test:integration:http": "cross-env TEST_TYPE=integration:http NODE_OPTIONS=--experimental-vm-modules jest --silent=false --runInBand --forceExit",
     "test:baseline": "cross-env TEST_TYPE=baseline NODE_OPTIONS=--experimental-vm-modules jest --silent=false --runInBand --forceExit",
-    "test:m0": "npm run typecheck && npm run test:unit && npm run test:integration:http && npm run test:baseline"
+    "test:m0": "npm run typecheck && npm run test:unit && npm run test:integration:http && npm run test:baseline",
+    "test:e2e": "cross-env TEST_TYPE=e2e NODE_OPTIONS=--experimental-vm-modules jest --silent=false --runInBand --forceExit",
+    "test:m1": "npm run typecheck && npm run test:unit && npm run test:integration:http && npm run test:e2e && npm run test:baseline"
   },
   "dependencies": {
     "@medusajs/cli": "2.21.0",
     "@medusajs/framework": "2.21.0",
-    "@medusajs/medusa": "2.21.0"
+    "@medusajs/medusa": "2.21.0",
+    "@platform/storefront-core": "*",
+    "@platform/storefront-schema": "*"
   },
   "devDependencies": {
     "@medusajs/test-utils": "2.21.0",
@@ -28,5 +32,7 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.6.2"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

@@ -21,5 +21,8 @@ module.exports = defineConfig({
     {
       resolve: "./src/modules/tenancy",
     },
+    {
+      resolve: "./src/modules/storefront",
+    },
   ],
 })

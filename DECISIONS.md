@@ -18,12 +18,16 @@
 | ADR-012 | Merchant payment flows and platform SaaS billing are separate money/data concepts. |
 | ADR-013 | Product facts inferred by AI remain suggestions/drafts until merchant confirmation. |
 | ADR-014 | M0 tenancy proof is a hard gate before serious platform development. |
+| ADR-015 | M0 accepted (2026-09-14, `m0-accepted`): shared Medusa v2 is the commerce foundation under the isolation architecture and binding constraints in `docs/MEDUSA_TENANCY_DECISION.md` §5. |
+| ADR-016 | `storefront-core` uses Next.js (App Router) with the Medusa JS SDK (user-approved for M1). |
+| ADR-017 | StorefrontProject deployments go through a provider abstraction. The first adapter is local and credential-free, serving per-deployment build artifacts on `*.preview.localhost`. The real hosting provider remains open and requires its own ADR (user-approved for M1). |
+| ADR-018 | Platform hostnames: live `<handle>.<platform-domain>`, preview `<handle>.preview.<platform-domain>`. The domain is a placeholder until the domain decision (user-approved for M1). |
+| ADR-019 | `platform/` is an npm-workspaces monorepo (`apps/*`, `packages/*`) with no additional build orchestrator yet (user-approved for M1). |
 
 ## Explicitly open / not locked
 
 - Exact provider/model versions and pricing.
-- Final Medusa tenancy implementation after M0 evidence.
-- Repository/deployment provider for merchant storefront projects.
+- Real hosting/repository provider for merchant storefront projects. The provider abstraction and local adapter are decided (ADR-017); the production provider is not.
 - Exact card provider integration details and regulatory review.
 - Domain registrar/DNS ownership model and apex-domain handling.
 - Production email vendor and sender-domain policy.

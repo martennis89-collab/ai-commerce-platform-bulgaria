@@ -1,0 +1,12 @@
+{
+  "name": "@platform/storefront-harness",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local development/reference harness for storefront-core. NOT a multi-tenant storefront runtime (Level 3 §2).",
+  "scripts": {
+    "dev": "node scripts/harness.mjs"
+  },
+  "dependencies": {
+    "@platform/storefront-core": "*"
+  }
+}
