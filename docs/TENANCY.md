@@ -149,8 +149,16 @@ There are two independent layers.
 
 ## 12. Invariants later milestones must test
 
-- **M1 StorefrontProject / Deployment:** each project and deployment is bound to exactly one environment. Build/deploy credentials and env vars carry only that environment's publishable key. A preview URL resolves only its own environment. There is no shared multi-tenant storefront runtime. Test that deployment A cannot be configured or rebuilt with environment B's key or data.
-- **Hostname / domains (M1, M9):** resolve with `resolveStoreEnvironmentByHostname` (exact normalised match, active only). A custom domain is bound only after DNS verification. Test that a look-alike host or an unverified domain never resolves, and that preview and live hosts are separate.
+- **M1 StorefrontProject / Deployment — proven in M1** (`docs/STOREFRONT.md`, M1 TESTS.json):
+  - Each project and deployment is bound to exactly one environment (M1-T01a, M1-T03d, M1-T07).
+  - The build manifest carries exactly that environment's publishable key, and build child processes receive no backend secrets (M1-T04, M1-T04u, M1-T04e).
+  - Deployment A cannot be configured or rebuilt with environment B's key, channel, config or identifiers (M1-T03a–c).
+  - Each preview URL renders only its own environment (M1-T02).
+  - There is no shared multi-tenant storefront runtime (M1-T07).
+  - Any future hosting provider must keep the manifest contract and re-run these tests.
+- **Hostnames — platform scheme proven in M1; custom domains remain M9.**
+  - Live and preview hostnames are distinct, and preview hosts resolve exactly and only while the environment is active (M1-T05, M1-T05e, M1-T05f).
+  - Still to test in M9: a custom domain is bound only after DNS verification, and an unverified domain never resolves.
 - **Caching:** M0 has no cache. Any cache of tenant-sensitive data must include the environment id in the key, and be tested by warming the cache as A and reading as B. Do not enable Medusa's `caching` feature flag without auditing `useCache` keys: `find-or-create-customer` caches by email alone.
 - **Media:** uploaded files get tenant-prefixed keys and ownership records. Test that merchant A cannot list, overwrite or delete B's files, and cannot attach B's file ids to A's products.
 - **AI runs (M2, M3):** `AgentRun`/`AIAction` are environment-owned. Tool inputs never contain tenant selection. Test replaying a run id from another environment.

@@ -17,6 +17,7 @@ import { z } from "@medusajs/framework/zod"
 import { MedusaError } from "@medusajs/framework/utils"
 import { ExecutionContext, Permission, requirePermission } from "./context"
 import { merchantCommerce } from "./merchant-commerce"
+import { merchantStorefront } from "./merchant-storefront"
 import { findTenantSelectors, isForbiddenTenantKey } from "./selectors"
 
 export type RiskLevel = 0 | 1 | 2 | 3
@@ -140,6 +141,14 @@ export const MERCHANT_TOOLS = {
         input.location_id,
         input.stocked_quantity
       ),
+  }),
+  "storefront.request_preview_deployment": defineTenantTool({
+    name: "storefront.request_preview_deployment",
+    risk: 1,
+    permission: "storefront:deploy",
+    // No arguments: project, environment and publishable key are server-derived.
+    input: z.object({}),
+    handler: (ctx) => merchantStorefront(ctx).requestPreviewDeployment(),
   }),
   "shoppers.list": defineTenantTool({
     name: "shoppers.list",

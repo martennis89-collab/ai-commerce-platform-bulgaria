@@ -1,0 +1,157 @@
+{
+  "mission": "m1-storefront-project",
+  "status": "ACCEPTED_PENDING_MERGE",
+  "commands": {
+    "packages": "npm run build:packages (platform/)",
+    "typecheck": "npm run typecheck (platform/apps/backend)",
+    "unit": "npm run test:unit",
+    "integration": "npm run test:integration:http",
+    "e2e": "npm run test:e2e",
+    "baseline": "npm run test:baseline",
+    "all": "npm run test:m1"
+  },
+  "regression_gate": {
+    "requirement": "M0 suites stay green after the workspace conversion and M1 changes",
+    "status": "PASS",
+    "evidence": "Full sequential run after review fixes (2026-09-14): M0 unit 53/53, M0 integration 43/43, baseline 6/6"
+  },
+  "suite_results": {
+    "packages_build": "PASS (npm run build:packages from platform/)",
+    "typecheck": "PASS (tsc --noEmit, 0 errors)",
+    "unit_all": "PASS 123/123 (53 M0 + 70 M1: platform-config, storefront-contracts, local-deploy/gateway, gateway-hardening, harness)",
+    "integration_all": "PASS 61/61 (M0 43 + M1 18, dry-run provider)",
+    "e2e_m1": "PASS 4/4 (local provider, 4 real next build static exports, preview gateway)",
+    "baseline_m0": "PASS 6/6",
+    "total_automated_tests": 194
+  },
+  "tests": [
+    {
+      "id": "M1-T01a",
+      "requirement": "Creation produces StoreEnvironment, owned sales channel/publishable key/stock location, pinned StorefrontProject, owner membership and a ready preview deployment",
+      "status": "PASS",
+      "evidence": "m1-storefront-project.spec.ts M1-T01a"
+    },
+    {
+      "id": "M1-T01b",
+      "requirement": "A failure after commerce resources exist compensates everything (no environment, channel, key, location, ownership, project or deployment left)",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "First run left the publishable key behind: Medusa's createApiKeysStep compensation cannot delete unrevoked keys. Fixed with a revoke-then-delete step"
+    },
+    {
+      "id": "M1-T01c",
+      "requirement": "Invalid, reserved and duplicate handles, an empty name, and tenant selectors in the body are rejected before creation; merchants cannot create environments",
+      "status": "PASS",
+      "evidence": "M1-T01c"
+    },
+    {
+      "id": "M1-T02",
+      "requirement": "Each preview URL renders only its own environment's store name and products",
+      "status": "PASS",
+      "evidence": "m1-preview-e2e.spec.ts M1-T02: maria-candles/petya-jewellery .preview.localhost each render only their own store name and product (real builds, gateway, x-platform-deployment matches)"
+    },
+    {
+      "id": "M1-T03a",
+      "requirement": "Merchants can only redeploy their own preview, with no parameters (environment/project/key/target selectors rejected; operator route forbidden)",
+      "status": "PASS",
+      "evidence": "M1-T03a"
+    },
+    {
+      "id": "M1-T03b",
+      "requirement": "The storefront typed tool cannot target another environment",
+      "status": "PASS",
+      "evidence": "M1-T03b"
+    },
+    {
+      "id": "M1-T03c",
+      "requirement": "Redeploy fails closed, without running the provider, for a foreign key, a key corrupted with another environment's channel, config injection, or an unavailable core version",
+      "status": "PASS",
+      "evidence": "M1-T03c (4 cases)"
+    },
+    {
+      "id": "M1-T03d",
+      "requirement": "Deployment rows whose hostname or environment disagree with the project are refused by the manifest builder",
+      "status": "PASS",
+      "evidence": "M1-T03d"
+    },
+    {
+      "id": "M1-T04",
+      "requirement": "The manifest carries exactly this environment's publishable key and no tenant id or other store data",
+      "status": "PASS",
+      "evidence": "M1-T04 (dry-run manifest); M1-T04e E2E artifact scan: no foreign publishable key and no backend secrets in any build file, own key present"
+    },
+    {
+      "id": "M1-T04u",
+      "requirement": "The local build child environment passes only allow-listed OS variables and never backend secrets",
+      "status": "PASS",
+      "evidence": "local-deploy.unit.spec.ts"
+    },
+    {
+      "id": "M1-T05",
+      "requirement": "Preview hosts resolve only their own ready deployment; live, look-alike, unknown and suspended hosts do not",
+      "status": "PASS",
+      "evidence": "M1-T05 (integration), platform-config.unit.spec.ts; E2E M1-T05e (live/look-alike/unknown hosts 404 at gateway) and M1-T05f (suspension stops preview immediately)"
+    },
+    {
+      "id": "M1-T06",
+      "requirement": "storefront-schema rejects invalid or extended config; manifest rejects extra keys, multiple keys, non-publishable keys and an unavailable core version; the core version is pinned per project",
+      "status": "PASS",
+      "evidence": "storefront-contracts.unit.spec.ts, M1-T01a, M1-T03c"
+    },
+    {
+      "id": "M1-T07",
+      "requirement": "No shared multi-tenant storefront runtime: per-deployment artifacts, one environment per hostname, the gateway serves static artifacts only, the harness takes exactly one manifest",
+      "status": "PASS",
+      "evidence": "M1-T07 (integration: unique artifacts, one environment per hostname), local-deploy.unit.spec.ts gateway suite (host routing, traversal, 404/405), harness.unit.spec.ts (harness exits 2 without exactly one manifest)"
+    },
+    {
+      "id": "M1-R1",
+      "requirement": "The preview gateway has a runnable entry point that serves ready deployments resolved from the database on the port used in preview URLs",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review round 1 MATERIAL_ISSUE (only tests started a gateway). Fixed: startPreviewGateway + src/scripts/preview-gateway.ts + `npm run preview:gateway`; integration M1-R1 serves Maria's ready deployment via startPreviewGateway and 404s Petya/live hosts; gateway-hardening.unit.spec.ts checks the script, npm script and port"
+    },
+    {
+      "id": "M1-N1",
+      "requirement": "Hostname collisions and concurrent same-handle creation leave no orphan organization or duplicate bindings",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N1 (orphan Organization). Fixed: organization is its own compensating step; validation checks live/preview hostname uniqueness. Integration M1-N1 (collision + 3 concurrent creates: exactly one environment, org, channel, key)"
+    },
+    {
+      "id": "M1-N2",
+      "requirement": "The gateway never follows symlinks/junctions out of an artifact or serves an artifact directory resolving outside the deploy root",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N2. Fixed: real-path containment. gateway-hardening.unit.spec.ts (junction inside artifact and junction artifact_ref both 404)"
+    },
+    {
+      "id": "M1-N3",
+      "requirement": "An older deployment finishing after a newer one never replaces it; exactly one ready deployment per project/target",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N3. Fixed: mark ready, then keep only the newest ready (time-ordered ids); resolver picks newest. Integration M1-N3"
+    },
+    {
+      "id": "M1-N4",
+      "requirement": "Revoking a project's publishable key stops its preview being served",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N4. Fixed in resolvePreviewRoute. Integration M1-N4"
+    },
+    {
+      "id": "M1-N5",
+      "requirement": "Merchants see only a generic deployment error; raw build/manifest detail and backend URLs stay operator-side",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "Review N5. Fixed in merchant-storefront.ts. Integration M1-N5"
+    }
+  ],
+  "last_full_run": "2026-09-14",
+  "independent_review": {
+    "round_1": "MATERIAL_ISSUE at 3cad636: M1-R1 preview gateway had no runnable entry point (preview URLs were dead outside tests); minor N1-N5. Suites reproduced 119/56/4/6.",
+    "fixes": "startPreviewGateway + `npm run preview:gateway` (R1); organization rollback step and hostname uniqueness validation (N1); real-path containment in gateway (N2); newest ready deployment wins (N3); revoked publishable key stops preview (N4); generic merchant deployment error (N5)",
+    "round_2": "ACCEPTED at 6ac1f68, no material issues. Reviewer reproduced unit 123/123, integration 61/61, e2e 4/4, baseline 6/6; ran npm run preview:gateway for real (loopback bind, per-host real builds, 404s, suspension live); forced failure at all 7 creation steps left zero rows; round-1 findings closed.",
+    "tracked_minor_notes": [
+      "N-a newest-ready ordering by ULID id is not monotonic within the same millisecond",
+      "N-b concurrent execution of the same deployment possible (documented non-atomic transition; M2)",
+      "N-c artifact_ref real path checked inside deploy root, not equal to builds/<deployment_id>/out",
+      "N-d gateway SIGINT/SIGTERM shutdown untested on Windows",
+      "N-e duplicate Host headers: first wins (requester-controlled, no gain)",
+      "N-f ::$DATA alternate stream serves the same file (no leak)"
+    ]
+  }
+}

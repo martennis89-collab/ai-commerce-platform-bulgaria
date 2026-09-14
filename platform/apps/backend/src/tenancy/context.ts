@@ -226,8 +226,17 @@ export const MERCHANT_ROLE_PERMISSIONS = {
     "inventory:read",
     "inventory:write",
     "shoppers:read",
+    "storefront:read",
+    "storefront:deploy",
   ],
-  staff: ["catalogue:read", "orders:read", "orders:write", "inventory:read", "inventory:write"],
+  staff: [
+    "catalogue:read",
+    "orders:read",
+    "orders:write",
+    "inventory:read",
+    "inventory:write",
+    "storefront:read",
+  ],
 } as const
 
 export type Permission = (typeof MERCHANT_ROLE_PERMISSIONS)["owner"][number]
