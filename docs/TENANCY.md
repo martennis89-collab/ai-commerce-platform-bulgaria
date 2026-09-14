@@ -45,7 +45,7 @@ A publishable key is a public storefront identifier, not a secret. Knowing Store
 | Shipping profile / shipping option | owned | Environment delivery config. |
 | Product | owned | Variants are authorized through their product's owner. |
 | Inventory item | owned | Inventory levels require both the item and the location to be owned. |
-| Promotion | owned | Codes are validated against the environment. |
+| Promotion | owned + **environment-bound** | Claiming a promotion adds exactly one rule `store_environment_id eq <owner>`. Cart promotion evaluation receives `store_environment_id` derived server-side from the cart's owner, so another store's promotions never match, including automatic ones. Codes are also validated against the environment. Automatic promotions that are not bound are rejected at create/update (RT05, RT06). |
 | Cart | owned | Claimed in `createCartWorkflow.cartCreated`, derived from the owned sales channel. |
 | Order | owned | Claimed in `completeCartWorkflow.orderCreated` from the cart owner. |
 | Payment collection | derived | Authorized through the `cart_payment_collection` link to an owned cart. |
@@ -64,13 +64,14 @@ Ownership is **fail-closed**: an unowned resource is invisible to, and unusable 
   1. reject tenant selectors;
   2. resolve the scope from the publishable key;
   3. match a **deny-by-default** route policy (`STOREFRONT_ROUTE_POLICIES`);
-  4. run the policy's ownership check;
-  5. reject Store API `fields` expansion that names `customer` / `customer_id` in **any** path segment (e.g. `+customer_id`, `*customer`, `shipping_address.customer_id`), because Medusa customers are global;
-  6. install a response guard on **every** guarded route that removes `customer` / `customer_id` at any depth (including nested `parent` carts), after `toJSON` serialisation so money values survive, and 500s if a policy-declared product, cart or order is not owned by the scope.
+  4. reject Store API `fields` expansion that names `customer` / `customer_id` in **any** path segment (e.g. `+customer_id`, `*customer`, `shipping_address.customer_id`), because Medusa customers are global;
+  5. on every route, require any `cart_id` query parameter to be an owned cart (Medusa uses it as pricing context on product routes);
+  6. run the policy's ownership check;
+  7. install a response guard on **every** guarded route. It removes `customer` / `customer_id` at any depth (including nested `parent` carts), after `toJSON` serialisation so money values survive. It applies the policy's `sanitize` step (shipping options are filtered to owned options). It 500s if a policy-declared product, cart, order or shipping option is not owned by the scope.
 - `GET /store/products` → `tenantProductListFilter` intersects Medusa's filters with owned product ids. It never widens them, and an empty set never becomes "no filter".
 - `/merchant*` → `authenticate("user", ["bearer"])`, then `merchantExecutionContextMiddleware`. Merchant routes call `merchantCommerce(ctx)` and nothing else.
 - `/admin*` → `adminOperatorOnly`: merchant users get 403.
-- `/auth/customer*` → denied, because M0 is guest checkout only.
+- `/auth*` → `denyCustomerAccounts` denies `/auth/customer…` on the decoded, lower-cased path, so encoded forms such as `/auth/%63ustomer/…` are denied too. `authMethodsPerActor.customer = []` in `medusa-config.ts` denies customer auth providers at config level as well. M0 is guest checkout only.
 
 Route params in store policies must look like Medusa ids (`prod_01…`), so a static sibling route such as `/store/products/search` is never misclassified as `/store/products/:id`.
 
@@ -93,13 +94,17 @@ Every other core Store route returns 403. That includes product variants, collec
 There are two independent layers.
 
 1. **HTTP policy.** Cart ids, variant ids, sales channel ids, shipping option ids, promotion codes, payment collections and line items in the path, body or query must be owned by the storefront's environment. Foreign ids return 404, indistinguishable from missing ones.
-2. **Workflow hooks** (`src/workflows/hooks/tenancy-isolation.ts`). These are context-free data invariants that hold for every caller, including future services, AI tools and subscribers:
+2. **Workflow hooks** (`src/workflows/hooks/tenancy-isolation.ts`, `tenancy-promotions.ts`). These are context-free data invariants that hold for every caller of the listed workflows, including future services, AI tools and subscribers:
    - `createCart.validate`: the sales channel is owned and the items belong to the same owner. `cartCreated` claims the cart.
    - `updateCart.validate`: the cart is owned, and its sales channel cannot move to another environment.
    - `addToCart.validate`: the variants are owned by the cart owner, and custom (variant-less) items are rejected.
    - `updateLineItemInCart`, `addShippingMethodToCart` and `updateCartPromotions`: the same owner rule applies.
    - `transferCartCustomer.validate`: always rejected.
    - `completeCart.validate` re-checks the sales channel, every item variant, shipping options and applied promotions before any order is created.
+   - `updateCartPromotions.setPromotionContext` sets `store_environment_id` from the cart's owner (or, during creation, its owned sales channel's owner). Otherwise it sets a value that matches no environment.
+   - `createPromotions.promotionsCreated` and `updatePromotions.promotionsUpdated` reject automatic promotions not bound to exactly one environment, and malformed environment rules.
+
+   Line-item deletion, payment-collection/session creation and promotion removal are protected at the HTTP layer only. They cannot introduce another store's resources.
 
 ## 7. Order validation
 
@@ -137,7 +142,9 @@ There are two independent layers.
 - **Shared regions.** Per-merchant payment accounts (Stripe Connect) must be resolved from the environment server-side, not from region-provider configuration.
 - **Operators cross all tenants.** Platform operators on `/admin` are outside the tenant boundary by design. Operator audit is future work.
 - **One environment per user.** Multi-environment membership needs a server-side session binding with a membership check. It must never become a client `store_environment_id`.
-- **Response backstop coverage.** It covers products, carts and orders only.
+- **Response guard coverage.** Ownership assertions cover products, carts, orders and shipping options. The customer-field strip removes every key named `customer`/`customer_id` in storefront responses, so future payment-provider session data must not depend on those key names.
+- **Promotion rule edits below the tenant layer.** Medusa's promotion-rule batch/delete workflows have no hooks. They are reachable only by platform operators (`/admin`); merchant promotion management must go through a tenant service. If an environment rule were removed, completion still fails closed (unowned or foreign promotion on the cart).
+- **Automatic promotions created directly through the promotion module** (bypassing workflows) and never claimed would be evaluated for every cart. Checkout then fails closed until provisioning binds them. Only trusted server code can do this.
 
 ## 12. Invariants later milestones must test
 

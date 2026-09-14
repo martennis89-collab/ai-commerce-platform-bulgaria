@@ -4,7 +4,7 @@
 Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules can enforce StoreEnvironment isolation per SCOPE_LEVEL_3 §1/§9 and ADR-003/004/014. The outcome is a binary decision in docs/MEDUSA_TENANCY_DECISION.md.
 
 ## Result
-**M0: PASS. Medusa decision ACCEPTED**, conditional on the binding constraints in the decision doc §5. Awaiting independent M0 review. M1 has not been started.
+**M0: PASS. Medusa decision ACCEPTED**, conditional on the binding constraints in the decision doc §5. The independent final review of b549864 returned MATERIAL_ISSUE (MI-1, automatic promotions). It is fixed and awaiting a repeat independent final review. M1 has not been started.
 
 ## Implementation approach (final)
 - **Backend.** `platform/apps/backend` is a standalone Medusa 2.21.0 app with the admin UI disabled. It uses a local Docker Postgres container, `m0-medusa-postgres`, on localhost:55432 (postgres/postgres, disposable).
@@ -14,9 +14,10 @@ Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules c
   - StoreEnvironmentMember and PlatformOperator.
   - Shopper, unique per environment and email.
 - **Scope and context** (`src/tenancy/context.ts`): a mint-guarded TenantScope and trusted resolvers (publishable-key binding, merchant membership, owned-resource derivation), plus ExecutionContext.
-- **Storefront policy** (`src/tenancy/storefront-policy.ts`): a deny-by-default /store policy table (19 routes), a product list filter, and a response backstop.
+- **Storefront policy** (`src/tenancy/storefront-policy.ts`): a deny-by-default /store policy table (19 routes), a product list filter, a central `cart_id` query ownership check, and a response guard (customer strip, shipping-option sanitising, ownership assertions).
 - **Merchant boundary** (`src/tenancy/merchant-guard.ts` and `merchant-commerce.ts`, routes in `src/api/merchant/*`): /admin is operator-only and /auth/customer is disabled.
-- **Workflow hooks** (`src/workflows/hooks/tenancy-isolation.ts`): 10 cart workflow hook handlers.
+- **Workflow hooks.** `src/workflows/hooks/tenancy-isolation.ts` has 10 cart workflow hook handlers. `tenancy-promotions.ts` has 3 promotion scoping handlers.
+- **Promotion binding** (`src/tenancy/promotions.ts`): promotions carry a `store_environment_id` rule, added when claimed.
 - **Tool boundary** (`src/tenancy/tools.ts`): typed tools with no possible tenant argument.
 
 ## Completed
@@ -25,10 +26,15 @@ Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules c
 - Final verified run (2026-09-14):
   - tsc: clean.
   - Unit: 53/53.
-  - Protected integration: 40/40 after independent red-team fix and Opus re-review hardening.
+  - Protected integration: 43/43, after the red-team fix, the Opus re-review hardening, and the final-review MI-1 fix.
   - Vanilla baseline: 6/6.
 - Documentation: docs/TENANCY.md, docs/MEDUSA_TENANCY_DECISION.md, ARCHITECTURE.md, TESTS.json, baseline-observations.json.
-- Commit 9755c22 holds the code and tests; a docs commit follows it.
+- Commits:
+  - 9755c22: code and tests.
+  - 01cd724: docs.
+  - 316273c: red-team fix.
+  - b549864: customer-strip hardening.
+  - Next commit: MI-1 promotion binding and review minors.
 
 ## Significant discoveries
 Evidence is in baseline-observations.json.
@@ -37,6 +43,7 @@ Evidence is in baseline-observations.json.
 - **Foreign variants.** Adding a foreign variant is blocked only incidentally, by inventory location, and succeeds when manage_inventory=false (NB03, NB04).
 - **Customers and admin.** There is one global guest customer per email (NB11), and the admin API has no tenant concept (NB12).
 - **Red-team customer exposure.** Independent review found Medusa Store cart/order responses could expose the global customer id/relation through defaults or field expansion. The first fix stripped only top-level fields on routes with a backstop; Opus re-review probes (RT03) found DELETE line-item still leaked via `parent.cart.customer`. The storefront guard now strips customer/customer_id at any depth on every guarded route (toJSON-safe) and rejects any field path with a customer segment.
+- **Automatic promotions are platform-wide (final review MI-1).** Medusa evaluates every active automatic promotion against every cart, and a rule-less promotion matches everything. Promotions are now bound with a `store_environment_id` rule, and the cart promotion context comes from the cart owner. Encoded `/auth/%63ustomer` paths, a foreign `cart_id` on product routes, and shipping-option listings under misconfiguration are also closed (RT05–RT07).
 - **Regions.** A country can belong to only one region, so regions must be platform-shared (NB15).
 - **Framework behaviour.**
   - The product list only filters by sales channel when more than one channel exists.
@@ -46,10 +53,10 @@ Evidence is in baseline-observations.json.
   - Workflows imported into Jest modules run without the app's hooks, so tests use the workflow engine by id.
 
 ## Remaining work
-None for M0. Next is an independent M0 review, which is the user's decision.
+Push the MI-1 fix, then repeat the independent final review of the new head. If ACCEPTED, the user's plan is: merge PR #1, tag M0, then start M1 on a new mission branch.
 
 ## Blocker
 None.
 
 ## Next intended action
-Stop. Do not begin M1.
+Repeat the final review. Do not begin M1 before an ACCEPTED review and the merge.

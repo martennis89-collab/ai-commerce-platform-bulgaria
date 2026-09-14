@@ -7,7 +7,7 @@
 | Date | 2026-09-14 |
 | Lead model | `claude-opus-5` (MODEL_ROUTING: tenancy/security → Opus, high) |
 | Commerce engine | Medusa `2.21.0` (latest at evaluation), Node 24.14, PostgreSQL 16 |
-| Status | Red-team finding (MEDIUM) remediated and re-reviewed by Opus; residual bypass found and closed; awaiting independent M0 review |
+| Status | Red-team finding (MEDIUM) remediated and hardened. Independent final review found MI-1 (automatic promotions) plus minors; all fixed. Awaiting repeat independent final review |
 
 ## Decision
 
@@ -61,7 +61,7 @@ Automated results, 2026-09-14. Full mapping in `.claude/mission-state/m0-medusa-
 |---|---|
 | `tsc --noEmit` | 0 errors |
 | Unit (`src/tenancy/__tests__`) | **53/53** |
-| Protected adversarial integration (`integration-tests/http/m0-tenant-isolation.spec.ts`) | **40/40** |
+| Protected adversarial integration (`integration-tests/http/m0-tenant-isolation.spec.ts`) | **43/43** |
 | Vanilla baseline characterization | 6/6 |
 
 | Invariant | Proven by |
@@ -71,6 +71,7 @@ Automated results, 2026-09-14. Full mapping in `.claude/mission-state/m0-medusa-
 | 3. Shopper action on A cannot touch B, even with valid B ids | T07–T16, T18, T25, T33 |
 | 4. Environment cannot be selected by client or tool | T26a–d, T27, T29, T33, unit selectors/tools |
 | 5. Same email shops independently without leakage | T02, T24, unit merchant-fields |
+| 3a. Another store's promotions (codes or automatic) never affect Store A carts or checkout | T14, RT05, RT06 |
 | 5a. Medusa global customer relation stays platform-internal on Store API cart/order responses | RT01–RT04, unit customer-exposure |
 | 6. Authorization independent of sales channels | T09, T12, T26c, **T28** (B's product deliberately linked into A's channel and location stays invisible and unpurchasable) |
 | 7. Central, maintainable enforcement | Deny-by-default policy verified against Medusa's route files (unit), fail-closed ownership (T31), workflow hooks below HTTP (T09–T14), single merchant service and tool boundary (T27) |
@@ -96,6 +97,12 @@ Structural properties that keep later milestones safe by default:
 - **Data-level single ownership** is enforced by a Postgres unique index, not by convention.
 - **Upgrade tripwires.** A new Medusa Store route is denied until classified (unit test). A removed `orderCreated` hook fails T01/T02.
 - **Global customer data is stripped at the Store API boundary.** Red-team tests RT01/RT02 proved Medusa can serialize its global customer relation through cart/order query fields and defaults; the first remediation stripped only top-level fields on routes with a response backstop. Opus re-review probe RT03 then showed `DELETE /store/carts/:id/line-items/:line_id` still returned the global customer inside `parent.cart`. The storefront guard now removes `customer`/`customer_id` at any depth on every guarded route (after `toJSON`, so totals survive) and rejects field paths naming a customer segment anywhere (RT04: 15 expansion variants, no leak). The pre-fix exposure contradicted §5.5; it is closed without changing the architecture, so the decision stays ACCEPTED.
+- **Promotions are environment-bound.** The independent final review (MI-1) found that Medusa evaluates every active automatic promotion against every cart platform-wide. A Petya automatic promotion appeared on Maria carts and blocked Maria checkout; no cross-tenant order was created, because the completion hook rejected it. Now:
+  - claiming a promotion binds it with a `store_environment_id` rule;
+  - cart promotion evaluation receives that attribute derived server-side from the cart's owner, never from sales channels;
+  - unbound automatic promotions are rejected at create/update (RT05, RT06).
+
+  The same review's minors are also closed: encoded `/auth/customer` paths, a foreign `cart_id` on product routes, and misconfigured shipping options (RT07). This is the same architecture, so the decision stays ACCEPTED.
 - **No Medusa core changes**, no forks, no patches: only Medusa-sanctioned extension points (module, middlewares, workflow hooks).
 - **Consistent with Level 3.** Level 3 already requires merchants and AI to act through typed, validated tools, so a tenant-scoped service layer is not extra work bolted onto Medusa. It is the layer the architecture mandates. Losing Medusa's admin API for merchants therefore costs nothing the architecture intended to use.
 
@@ -108,7 +115,7 @@ These follow from the evidence. Breaking any of them re-opens this decision.
 3. **Every tenant-owned resource is claimed in the workflow that creates it**, with compensation.
 4. **Regions, tax regions and payment-provider registration are platform-shared.** Merchant-specific payment accounts are resolved from the environment.
 5. **Medusa customers are platform-internal.** Merchant customer features use `Shopper`. Medusa customer accounts stay disabled unless re-designed on `Shopper`.
-6. **Promotion codes must be namespaced per environment** before merchants can create codes (Medusa's code namespace is global).
+6. **Promotions are environment-bound.** Every tenant promotion carries exactly one `store_environment_id` rule, and the cart promotion context is server-derived. Promotion codes must be namespaced per environment before merchants can create codes, because Medusa's code namespace is global. Merchant promotion rule changes go only through tenant services.
 7. **Workflow isolation hooks are part of the upgrade checklist.** Re-run the M0 suites on every Medusa upgrade.
 8. **No tenant-sensitive cache** without environment-keyed cache keys and an A-warms/B-reads test. Keep Medusa's `caching` flag off until audited.
 
@@ -118,11 +125,11 @@ These follow from the evidence. Breaking any of them re-opens this decision.
 |---|---|---|
 | 1 | Both stores operate normally | Yes (T01) |
 | 2 | Same shopper purchases independently from both | Yes (T02) |
-| 3 | All implemented cross-tenant attacks rejected | Yes (T03–T33) |
+| 3 | All implemented cross-tenant attacks rejected | Yes (T03–T33, RT01–RT07) |
 | 4 | Tenant context from trusted server execution | Yes (T26, T27, T29) |
 | 5 | Sales channels not relied on for authorization | Yes (T28, T12, T26c) |
 | 6 | Central and maintainable enforcement | Yes (§4, unit policy test, T31) |
-| 7 | Automated tests prove the above | Yes (99 automated tests) |
+| 7 | Automated tests prove the above | Yes (102 automated tests) |
 | 8 | No LOCKED requirement weakened | Yes, none changed |
 | 9 | No unreasonable ongoing hacks | Yes, §4; constraints in §5 are architectural rules, not per-feature patches |
 
@@ -131,7 +138,9 @@ These follow from the evidence. Breaking any of them re-opens this decision.
 - Owned-id list filtering (`id IN (...)`) will need a join or the Index Module at larger catalogue sizes.
 - Operators on `/admin` can act across tenants. This needs an audit trail before production.
 - Future Medusa versions may change workflow shapes. This is mitigated by §5.7 and the tripwires.
-- The response backstop covers products, carts and orders only. Extend it as routes are enabled.
+- The response guard's ownership assertions cover products, carts, orders and shipping options. Extend them as routes are enabled.
+- Promotion-rule batch/delete workflows have no Medusa hooks. They are operator-only; completion fails closed if an environment rule is removed.
+- An automatic promotion created directly through the promotion module and never claimed would be evaluated for every cart. Checkout fails closed until it is bound. Only trusted server code can do this.
 
 ## 8. Surfaces not yet testable
 

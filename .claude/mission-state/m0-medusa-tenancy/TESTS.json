@@ -13,7 +13,7 @@
   "suite_results": {
     "typecheck": "PASS (tsc --noEmit, 0 errors)",
     "unit": "PASS 53/53 (6 suites)",
-    "integration_protected": "PASS 40/40 (integration-tests/http/m0-tenant-isolation.spec.ts, after red-team fix + Opus re-review hardening)",
+    "integration_protected": "PASS 43/43 (integration-tests/http/m0-tenant-isolation.spec.ts, after red-team fix, Opus re-review hardening and final-review MI-1 fix)",
     "baseline_vanilla_medusa": "PASS 6/6 characterization tests; observations in baseline-observations.json"
   },
   "tests": [
@@ -30,7 +30,7 @@
     { "id": "T11", "requirement": "Store B context cannot complete or read Store A cart", "invariants": [3], "status": "PASS", "evidence": "T11 (404)" },
     { "id": "T12", "requirement": "Cart cannot be moved to Store B sales channel (HTTP and workflow)", "invariants": [3, 6], "status": "PASS", "evidence": "T12; baseline NB08 shows native Medusa allows it" },
     { "id": "T13", "requirement": "Store B shipping option cannot be attached to Store A cart (HTTP and workflow)", "invariants": [3], "status": "PASS", "evidence": "T13" },
-    { "id": "T14", "requirement": "Store B promotion code cannot be applied to Store A cart (HTTP and workflow); own code works", "invariants": [3], "status": "PASS", "evidence": "T14; baseline NB09 shows native Medusa applies it" },
+    { "id": "T14", "requirement": "Store B promotion code cannot be applied to Store A cart (HTTP and workflow); own code works", "invariants": [3], "status": "PASS", "evidence": "T14; baseline NB09 shows native Medusa applies it; automatic promotions covered by RT05/RT06" },
     { "id": "T15", "requirement": "Store B payment collection / cart cannot be driven from Store A", "invariants": [3], "status": "PASS", "evidence": "T15 (404)" },
     { "id": "T16", "requirement": "Store B line item cannot be addressed through Store A cart path", "invariants": [3], "status": "PASS", "evidence": "T16 (404)" },
     { "id": "T17", "requirement": "Order isolation: merchant A cannot read Store B order; list only own", "invariants": [1], "status": "PASS", "evidence": "T17" },
@@ -45,6 +45,9 @@
     { "id": "RT02", "requirement": "Storefront cart responses and field expansion cannot expose Medusa's global customer id/relation", "invariants": [5], "status": "PASS_AFTER_FIX", "evidence": "Red-team test covers default cart response stripping and rejects fields=+customer,+customer.id with 400" },
     { "id": "RT03", "requirement": "No default storefront response on any cart/order route (create, line items add/update/delete, update, promotions, shipping, payment collection/session, complete, order) carries the global customer id or relation", "invariants": [5], "status": "PASS_AFTER_FIX", "evidence": "Opus re-review probe first FAILED on DELETE /store/carts/:id/line-items/:line_id (parent cart carried the global customer; route had no response backstop). Fixed by stripping customer/customer_id at any depth on every guarded storefront response" },
     { "id": "RT04", "requirement": "Field-expansion variants (nested address paths, wildcards, array/object/repeated params, whitespace) cannot reach the global customer id", "invariants": [5], "status": "PASS", "evidence": "RT04: 15 variants, statuses logged; no response contains the global cus_ id. Field rejection is now segment-based at any depth" },
+    { "id": "RT05", "requirement": "An environment-bound automatic promotion applies only in its own store; the other store receives no discount and checks out normally", "invariants": [2, 3], "status": "PASS_AFTER_FIX", "evidence": "Independent final review MI-1: Petya automatic promotion was applied to Maria carts and blocked Maria checkout (400 tenant isolation violation). Fixed by store_environment_id promotion rule plus server-derived cart promotion context" },
+    { "id": "RT06", "requirement": "Unbound automatic promotions are rejected at creation; promotions created below workflows are bound on provisioning, never cross stores, and cannot be claimed by another store", "invariants": [2, 3, 7], "status": "PASS_AFTER_FIX", "evidence": "Reproduces the reviewer's probe P1 shape (rule-less automatic promotion created via the promotion module, assigned to Petya): Maria cart unaffected and completes; Petya cart gets it; Maria claim rejected" },
+    { "id": "RT07", "requirement": "Review minors: encoded/case-variant customer-auth paths denied; foreign cart_id on product routes 404; misconfigured shared location does not list other store shipping options", "invariants": [3, 5], "status": "PASS_AFTER_FIX", "evidence": "/auth/%63ustomer register/login no longer succeed (decoded-path middleware + authMethodsPerActor.customer=[]); product routes assert cart_id ownership; shipping-options responses sanitised to owned options" },
     { "id": "T25", "requirement": "Foreign identifier sweep over every M0 tenant-sensitive merchant and store endpoint", "invariants": [1, 2, 3], "status": "PASS", "evidence": "T25 (18 endpoints, all 404, no Store B data in bodies, Petya cart unchanged)" },
     { "id": "T26a", "requirement": "StoreEnvironment spoofing (storefront): header/body/query/nested metadata selectors rejected", "invariants": [4], "status": "PASS", "evidence": "T26a (400)" },
     { "id": "T26b", "requirement": "StoreEnvironment spoofing (merchant): header/query/body selectors rejected", "invariants": [4], "status": "PASS", "evidence": "T26b (400)" },
@@ -61,7 +64,7 @@
     { "id": "U-CUSTOMER", "requirement": "Global customer field rejection (any segment, array/object forms) and deep stripping that preserves toJSON-serialised values (BigNumber totals, dates)", "invariants": [5, 7], "status": "PASS", "evidence": "customer-exposure.unit.spec.ts; toJSON case added after a regression (order totals NaN) was caught by T02" },
     { "id": "U-FIELDS", "requirement": "Merchant read allow-lists never traverse global customer relation or wildcards", "invariants": [5, 7], "status": "PASS", "evidence": "merchant-fields.unit.spec.ts" },
     { "id": "U-SELECTORS", "requirement": "Tenant selector detection (keys, nested, bracketed, headers)", "invariants": [4], "status": "PASS", "evidence": "selectors.unit.spec.ts" },
-    { "id": "D-DEPLOY", "requirement": "Deployment isolation", "invariants": [4], "status": "DEFERRED_NO_SURFACE", "evidence": "StorefrontProject/Deployment introduced in M1; invariant recorded in docs/TENANCY.md §11" },
+    { "id": "D-DEPLOY", "requirement": "Deployment isolation", "invariants": [4], "status": "DEFERRED_NO_SURFACE", "evidence": "StorefrontProject/Deployment introduced in M1; invariant recorded in docs/TENANCY.md §12" },
     { "id": "D-DOMAIN", "requirement": "Custom domain resolution", "invariants": [4], "status": "DEFERRED_NO_SURFACE", "evidence": "M9; platform hostname resolver proven by T29; invariant recorded" }
   ],
   "baseline_characterization": {

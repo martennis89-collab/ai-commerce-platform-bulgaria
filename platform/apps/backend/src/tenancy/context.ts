@@ -7,6 +7,7 @@ import {
 import { TENANCY_MODULE } from "../modules/tenancy"
 import type { OwnedResourceType } from "../modules/tenancy/models"
 import type TenancyModuleService from "../modules/tenancy/service"
+import { bindPromotionsToEnvironment } from "./promotions"
 
 /**
  * Only code in this file can mint a TenantScope. Every TenantScope therefore
@@ -144,7 +145,18 @@ export class TenantScope {
     await this.assertOwned("stock_location", locationId)
   }
 
-  claim(type: OwnedResourceType, ids: string[]) {
+  async claim(type: OwnedResourceType, ids: string[]) {
+    if (type === "promotion") {
+      // Reject ownership conflicts before touching promotion rules, then bind.
+      const owners = await this.tenancy().getOwners("promotion", ids)
+      if (ids.some((id) => owners.has(id) && owners.get(id) !== this.storeEnvironmentId)) {
+        throw new MedusaError(
+          MedusaError.Types.NOT_ALLOWED,
+          "Tenant isolation violation: promotion already owned by another store environment"
+        )
+      }
+      await bindPromotionsToEnvironment(this.#container, this.storeEnvironmentId, ids)
+    }
     return this.tenancy().claimResources(this.storeEnvironmentId, type, ids)
   }
 }

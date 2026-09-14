@@ -9,6 +9,7 @@ import { ContainerRegistrationKeys, FeatureFlag, Modules } from "@medusajs/frame
 import {
   addShippingMethodToCartWorkflowId,
   addToCartWorkflowId,
+  createPromotionsWorkflowId,
   createApiKeysWorkflow,
   createProductsWorkflow,
   linkSalesChannelsToApiKeyWorkflow,
@@ -29,10 +30,11 @@ import {
   createUserWithToken,
   forgeJwt,
   prepareCart,
+  SHIPPING_ADDRESS,
   storefront,
 } from "../fixtures/http"
 import { provisionTenant, TenantFixture } from "../fixtures/tenancy"
-import { registerPlatformOperator } from "../../src/tenancy/provisioning"
+import { assignResourcesToEnvironment, registerPlatformOperator } from "../../src/tenancy/provisioning"
 import { buildMerchantExecutionContext } from "../../src/tenancy/context"
 import { executeTenantTool, MERCHANT_TOOLS } from "../../src/tenancy/tools"
 import { TENANCY_MODULE } from "../../src/modules/tenancy"
@@ -554,6 +556,110 @@ medusaIntegrationTestRunner({
         // eslint-disable-next-line no-console
         console.log("RT04 observed statuses", observed)
         expect(leaks).toEqual([])
+      })
+    })
+
+    // ------------------------------------------- independent review (MI-1 etc.)
+    describe("promotion isolation and review hardening", () => {
+      const autoPromotion = (code: string, rules?: any[]) => ({
+        code,
+        type: "standard",
+        status: "active",
+        is_automatic: true,
+        application_method: { type: "percentage", target_type: "order", allocation: "across", value: 50, currency_code: "eur" },
+        ...(rules ? { rules } : {}),
+      })
+      const codesOf = (cart: any) => ((cart?.promotions ?? []) as any[]).map((p) => p.code)
+      const buildCart = async (t: TenantFixture) => {
+        const h = storefront(t.publishableKey)
+        const { data } = await api.post("/store/carts", { region_id: regionId, email: SHOPPER_EMAIL }, h)
+        const added = await api.post(`/store/carts/${data.cart.id}/line-items`, { variant_id: t.variantId, quantity: 1 }, h)
+        return { cartId: data.cart.id as string, cart: added.data.cart }
+      }
+      const finishCheckout = async (t: TenantFixture, cartId: string) => {
+        const h = storefront(t.publishableKey)
+        await api.post(`/store/carts/${cartId}`, { shipping_address: SHIPPING_ADDRESS }, h)
+        const opts = await api.get(`/store/shipping-options?cart_id=${cartId}`, h)
+        await api.post(`/store/carts/${cartId}/shipping-methods`, { option_id: opts.data.shipping_options[0].id }, h)
+        const pc = await api.post(`/store/payment-collections`, { cart_id: cartId }, h)
+        await api.post(`/store/payment-collections/${pc.data.payment_collection.id}/payment-sessions`, { provider_id: "pp_system_default" }, h)
+        return (await call(api.post(`/store/carts/${cartId}/complete`, {}, h))).data
+      }
+
+      it("RT05 an environment-bound automatic promotion applies only in its own store; the other store checks out normally", async () => {
+        const container = getContainer()
+        const engine = container.resolve(Modules.WORKFLOW_ENGINE)
+        const { result, errors } = await engine.run(createPromotionsWorkflowId, {
+          input: {
+            promotionsData: [
+              autoPromotion("PETYA-AUTO50", [{ attribute: "store_environment_id", operator: "eq", values: [petya.envId] }]),
+            ],
+          },
+          throwOnError: false,
+        })
+        expect(errors ?? []).toEqual([])
+        await assignResourcesToEnvironment(container, petya.envId, { promotion: [(result as any)[0].id] })
+
+        const mariaCart = await buildCart(maria)
+        expect(codesOf(mariaCart.cart)).not.toContain("PETYA-AUTO50")
+        expect(Number(mariaCart.cart.discount_total ?? 0)).toBe(0)
+        const done = await finishCheckout(maria, mariaCart.cartId)
+        expect(done.type).toBe("order")
+
+        const petyaCart = await buildCart(petya)
+        expect(codesOf(petyaCart.cart)).toContain("PETYA-AUTO50")
+      })
+
+      it("RT06 unbound automatic promotions are rejected at creation; below-workflow promotions are bound on provisioning and never cross stores", async () => {
+        const container = getContainer()
+        const engine = container.resolve(Modules.WORKFLOW_ENGINE)
+        const promotionModule = container.resolve(Modules.PROMOTION)
+
+        const { errors } = await engine.run(createPromotionsWorkflowId, {
+          input: { promotionsData: [autoPromotion("GLOBAL-AUTO50")] },
+          throwOnError: false,
+        })
+        expect(errors?.[0]?.error?.message).toMatch(ISOLATION_VIOLATION)
+        expect(await promotionModule.listPromotions({ code: "GLOBAL-AUTO50" })).toEqual([])
+
+        // Reviewer's exact attack shape: rule-less automatic promotion created without workflows, then assigned to Petya.
+        const [raw] = await promotionModule.createPromotions([autoPromotion("PETYA-RAW50") as any])
+        await assignResourcesToEnvironment(container, petya.envId, { promotion: [raw.id] })
+        const mariaCart = await buildCart(maria)
+        expect(codesOf(mariaCart.cart)).not.toContain("PETYA-RAW50")
+        expect((await finishCheckout(maria, mariaCart.cartId)).type).toBe("order")
+        expect(codesOf((await buildCart(petya)).cart)).toContain("PETYA-RAW50")
+
+        await expect(
+          assignResourcesToEnvironment(container, maria.envId, { promotion: [raw.id] })
+        ).rejects.toThrow(ISOLATION_VIOLATION)
+      })
+
+      it("RT07 review minors: encoded customer-auth paths, foreign cart_id on product routes, misconfigured shipping options", async () => {
+        for (const p of [
+          "/auth/%63ustomer/emailpass/register",
+          "/AUTH/CUSTOMER/emailpass/register",
+          "/auth/customer/emailpass/register",
+          "/auth/%63ustomer/emailpass",
+        ]) {
+          const res = await call(api.post(p, { email: `probe-${Date.now()}@x.test`, password: "Probe-pass-1!" }))
+          expect({ p, ok: res.status < 400, token: Boolean(res.data?.token) }).toEqual({ p, ok: false, token: false })
+        }
+        expect((await call(api.post("/auth/user/emailpass", { email: "owner@maria.test", password: "M0-test-password!" }))).status).toBe(200)
+
+        expect((await call(api.get(`/store/products?cart_id=${petyaOpen.cartId}`, sfA()))).status).toBe(404)
+        expect((await call(api.get(`/store/products/${maria.productId}?cart_id=${petyaOpen.cartId}`, sfA()))).status).toBe(404)
+        expect((await call(api.get(`/store/products?cart_id=${mariaOpen.cartId}`, sfA()))).status).toBe(200)
+
+        const link = getContainer().resolve(ContainerRegistrationKeys.LINK)
+        await link.create({
+          [Modules.SALES_CHANNEL]: { sales_channel_id: maria.salesChannelId },
+          [Modules.STOCK_LOCATION]: { stock_location_id: petya.stockLocationId },
+        })
+        const opts = await api.get(`/store/shipping-options?cart_id=${mariaOpen.cartId}`, sfA())
+        const ids = opts.data.shipping_options.map((o: any) => o.id)
+        expect(ids).toContain(maria.shippingOptionId)
+        expect(ids).not.toContain(petya.shippingOptionId)
       })
     })
 

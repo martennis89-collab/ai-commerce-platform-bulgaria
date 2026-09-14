@@ -89,15 +89,31 @@ export async function adminOperatorOnly(
   }
 }
 
+/**
+ * Mounted on `/auth*`. Matches on the decoded, lower-cased, slash-collapsed path
+ * because Express decodes route params: `/auth/%63ustomer/...` reaches the
+ * customer auth routes. `authMethodsPerActor.customer = []` in medusa-config is
+ * the second, config-level layer.
+ */
 export async function denyCustomerAccounts(
-  _req: MedusaRequest,
+  req: MedusaRequest,
   _res: MedusaResponse,
   next: MedusaNextFunction
 ) {
-  next(
-    new MedusaError(
-      MedusaError.Types.FORBIDDEN,
-      "Customer accounts are not enabled; storefronts use tenant-scoped guest checkout"
-    )
+  const denied = new MedusaError(
+    MedusaError.Types.FORBIDDEN,
+    "Customer accounts are not enabled; storefronts use tenant-scoped guest checkout"
   )
+  let path: string
+  try {
+    path = decodeURIComponent((req.originalUrl ?? req.url).split("?")[0])
+      .toLowerCase()
+      .replace(/\/{2,}/g, "/")
+  } catch {
+    return next(denied)
+  }
+  if (path === "/auth/customer" || path.startsWith("/auth/customer/")) {
+    return next(denied)
+  }
+  return next()
 }

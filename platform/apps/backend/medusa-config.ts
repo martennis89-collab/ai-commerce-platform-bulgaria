@@ -11,6 +11,8 @@ module.exports = defineConfig({
       authCors: process.env.AUTH_CORS || "http://localhost:9000",
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
+      // Guest checkout only: Medusa customer identities are global across stores.
+      authMethodsPerActor: { user: ["emailpass"], customer: [] },
     },
   },
   // M0 has no merchant UI; the Medusa admin dashboard is operator tooling only and is not built.

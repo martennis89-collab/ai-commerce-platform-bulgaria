@@ -15,7 +15,7 @@ export default defineMiddlewares({
   routes: [
     { matcher: "/store*", middlewares: [storefrontTenantGuard] },
     { matcher: "/admin*", middlewares: [adminOperatorOnly] },
-    { matcher: "/auth/customer*", middlewares: [denyCustomerAccounts] },
+    { matcher: "/auth*", middlewares: [denyCustomerAccounts] },
     {
       matcher: "/merchant*",
       middlewares: [authenticate("user", ["bearer"]), merchantExecutionContextMiddleware],

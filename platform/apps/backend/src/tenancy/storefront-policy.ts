@@ -36,7 +36,9 @@ export type StorefrontRoutePolicy = {
   rule: string
   check: (input: PolicyInput) => Promise<void>
   /** Resources in the JSON response that must be owned by the scope (response backstop). */
-  response?: (body: any) => { type: "product" | "order" | "cart"; ids: string[] }[]
+  response?: (body: any) => { type: "product" | "order" | "cart" | "shipping_option"; ids: string[] }[]
+  /** Removes resources the scope does not own from a successful response (before `response` checks). */
+  sanitize?: (body: any, scope: TenantScope) => Promise<any>
 }
 
 const asArray = (v: unknown): string[] =>
@@ -220,13 +222,27 @@ export const STOREFRONT_ROUTE_POLICIES: StorefrontRoutePolicy[] = [
   {
     method: "GET",
     path: "/store/shipping-options",
-    rule: "cart_id query parameter is required and must be owned",
+    rule: "cart_id query parameter is required and must be owned; only owned options are returned",
     check: async ({ scope, query }) => {
       if (typeof query?.cart_id !== "string") {
         throw new MedusaError(MedusaError.Types.INVALID_DATA, "cart_id is required")
       }
       await scope.assertOwned("cart", query.cart_id)
     },
+    sanitize: async (body, scope) => {
+      const options: any[] = body?.shipping_options ?? []
+      const owners = await scope.tenancy().getOwners(
+        "shipping_option",
+        options.map((o) => o.id)
+      )
+      return {
+        ...body,
+        shipping_options: options.filter((o) => owners.get(o.id) === scope.storeEnvironmentId),
+      }
+    },
+    response: (body) => [
+      { type: "shipping_option", ids: ((body?.shipping_options ?? []) as any[]).map((o) => o.id) },
+    ],
   },
   {
     method: "POST",
@@ -363,6 +379,12 @@ export async function storefrontTenantGuard(
       )
     }
 
+    // Medusa accepts `cart_id` on several read routes (e.g. product pricing context).
+    // Wherever it appears, it must be a cart owned by this storefront.
+    if (req.query?.cart_id !== undefined) {
+      await scope.assertOwned("cart", asArray(req.query.cart_id as any))
+    }
+
     await match.policy.check({
       scope,
       params: match.params,
@@ -372,7 +394,7 @@ export async function storefrontTenantGuard(
 
     req.tenantScope = scope
 
-    installResponseGuard(res, scope, match.policy.response)
+    installResponseGuard(res, scope, match.policy)
     return next()
   } catch (e) {
     return next(e)
@@ -389,17 +411,21 @@ export async function storefrontTenantGuard(
 function installResponseGuard(
   res: MedusaResponse,
   scope: TenantScope,
-  extract: StorefrontRoutePolicy["response"]
+  policy: StorefrontRoutePolicy
 ) {
   const originalJson = res.json.bind(res)
   ;(res as any).json = (rawBody: any) => {
     const body = stripGlobalCustomerFields(rawBody)
-    if (res.statusCode >= 400 || !extract) {
+    if (res.statusCode >= 400 || (!policy.response && !policy.sanitize)) {
       return originalJson(body)
     }
-    const checks = extract(body).filter((c) => c.ids.length)
-    Promise.all(checks.map((c) => scope.assertOwned(c.type, c.ids)))
-      .then(() => originalJson(body))
+    ;(async () => {
+      const sanitized = policy.sanitize ? await policy.sanitize(body, scope) : body
+      const checks = (policy.response?.(sanitized) ?? []).filter((c) => c.ids.length)
+      await Promise.all(checks.map((c) => scope.assertOwned(c.type, c.ids)))
+      return sanitized
+    })()
+      .then((sanitized) => originalJson(sanitized))
       .catch(() => {
         res.status(500)
         originalJson({
