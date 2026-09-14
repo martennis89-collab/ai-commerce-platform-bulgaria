@@ -1,49 +1,54 @@
 # M0 — Medusa Tenant Isolation Proof — STATE
 
 ## Objective
-Prove (or disprove) that shared Medusa v2 (2.21.0) + custom tenancy modules can enforce StoreEnvironment
-isolation per SCOPE_LEVEL_3 §1/§9, ADR-003/004/014. Binary decision in docs/MEDUSA_TENANCY_DECISION.md.
+Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules can enforce StoreEnvironment isolation per SCOPE_LEVEL_3 §1/§9 and ADR-003/004/014. The outcome is a binary decision in docs/MEDUSA_TENANCY_DECISION.md.
 
-## Current approach
-- `platform/apps/backend`: standalone Medusa 2.21.0 app (admin UI disabled), local Docker Postgres
-  container `m0-medusa-postgres` on localhost:55432 (postgres/postgres, disposable).
-- `src/modules/tenancy`: Organization, StoreEnvironment, ResourceOwnership (DB unique single-owner),
-  StoreEnvironmentMember, PlatformOperator, Shopper (unique env+email).
-- `src/tenancy/context.ts`: TenantScope (mint-guarded), trusted resolvers (publishable-key binding,
-  merchant membership, owned-resource derivation), ExecutionContext.
-- `src/tenancy/storefront-policy.ts`: deny-by-default /store route policy + product list filter + response backstop.
-- `src/tenancy/merchant-guard.ts` + `src/api/merchant/*`: tenant-scoped merchant API; /admin operator-only;
-  /auth/customer disabled.
-- `src/workflows/hooks/tenancy-isolation.ts`: cart workflow hooks (context-free invariants, order/shopper ownership).
-- `src/tenancy/tools.ts`: typed tool boundary (no tenant args possible).
-- Tests: unit (src/tenancy/__tests__), protected integration (integration-tests/http), vanilla baseline
-  (integration-tests/baseline with baseline-app cwd). Scripts: test:unit, test:integration:http, test:baseline, test:m0.
+## Result
+**M0: PASS. Medusa decision ACCEPTED**, conditional on the binding constraints in the decision doc §5. Awaiting independent M0 review. M1 has not been started.
+
+## Implementation approach (final)
+- **Backend.** `platform/apps/backend` is a standalone Medusa 2.21.0 app with the admin UI disabled. It uses a local Docker Postgres container, `m0-medusa-postgres`, on localhost:55432 (postgres/postgres, disposable).
+- **Tenancy module** (`src/modules/tenancy`):
+  - Organization and StoreEnvironment.
+  - ResourceOwnership, with a DB-unique single owner per resource.
+  - StoreEnvironmentMember and PlatformOperator.
+  - Shopper, unique per environment and email.
+- **Scope and context** (`src/tenancy/context.ts`): a mint-guarded TenantScope and trusted resolvers (publishable-key binding, merchant membership, owned-resource derivation), plus ExecutionContext.
+- **Storefront policy** (`src/tenancy/storefront-policy.ts`): a deny-by-default /store policy table (19 routes), a product list filter, and a response backstop.
+- **Merchant boundary** (`src/tenancy/merchant-guard.ts` and `merchant-commerce.ts`, routes in `src/api/merchant/*`): /admin is operator-only and /auth/customer is disabled.
+- **Workflow hooks** (`src/workflows/hooks/tenancy-isolation.ts`): 10 cart workflow hook handlers.
+- **Tool boundary** (`src/tenancy/tools.ts`): typed tools with no possible tenant argument.
 
 ## Completed
-- Canonical context read; no LOCKED conflict. ARCHITECTURE.md referenced by mission does not exist (will create minimal).
-- Implementation of all layers above; tsc clean; unit 34/34.
-- Baseline run 1 recorded (baseline-observations.json).
-- Protected suite run 1: 30/35; 5 failures all direct Jest-imported workflow `.run()` calls (hook-less module
-  instance). Rewritten to call via workflow engine by id.
+- Canonical context read; no LOCKED conflict. ARCHITECTURE.md did not exist, so a minimal one was created with M0 clarifications only.
+- Implementation, migrations, fixtures (Maria Candles / Petya Jewellery, shared shopper test@example.com).
+- Final verified run (2026-09-14):
+  - tsc: clean.
+  - Unit: 36/36.
+  - Protected integration: 36/36 (run 3).
+  - Vanilla baseline: 6/6.
+- Documentation: docs/TENANCY.md, docs/MEDUSA_TENANCY_DECISION.md, ARCHITECTURE.md, TESTS.json, baseline-observations.json.
+- Commit 9755c22 holds the code and tests; a docs commit follows it.
 
-## Discoveries (evidence in baseline-observations.json)
-- Store API: cart/order ids are bearer secrets, not bound to publishable key (NB06, NB07, NB13).
-- Cart can be moved to another sales channel via POST /store/carts/:id (NB08).
-- Promotion codes are global and applicable across stores (NB09); code uniqueness is global (NB14).
-- Foreign variant add blocked only incidentally by inventory-location check; succeeds when manage_inventory=false (NB03/NB04).
-- Guest customer is one global row per email across stores (NB11); admin API has no tenant concept (NB12).
-- Region countries are globally unique -> regions must be platform-shared (NB15).
-- /store/products only filters by sales channel when >1 sales channel exists in the DB.
-- Core caching feature flag default false; RBAC module is resource:operation only (not row-level).
-- completeCartWorkflow `orderCreated` hook exists at runtime but is @ignore in typings.
-- Hooks registered by the app do not apply to workflow objects imported separately in Jest.
+## Significant discoveries
+Evidence is in baseline-observations.json.
+- **Carts and orders.** Cart and order ids are bearer secrets and are not bound to the publishable key (NB06, NB07, NB13). A cart can be moved onto another sales channel (NB08).
+- **Promotions.** Promo codes are global and apply across stores (NB09), and code uniqueness is global (NB14).
+- **Foreign variants.** Adding a foreign variant is blocked only incidentally, by inventory location, and succeeds when manage_inventory=false (NB03, NB04).
+- **Customers and admin.** There is one global guest customer per email (NB11), and the admin API has no tenant concept (NB12).
+- **Regions.** A country can belong to only one region, so regions must be platform-shared (NB15).
+- **Framework behaviour.**
+  - The product list only filters by sales channel when more than one channel exists.
+  - Core caching is off by default.
+  - RBAC is resource:operation only, not row-level.
+  - The `orderCreated` hook works at runtime but is @ignore in the typings.
+  - Workflows imported into Jest modules run without the app's hooks, so tests use the workflow engine by id.
 
-## Remaining
-- Rerun protected + baseline suites; fix; checkpoint commit.
-- TESTS.json, docs/TENANCY.md, docs/MEDUSA_TENANCY_DECISION.md, minimal ARCHITECTURE.md note.
+## Remaining work
+None for M0. Next is an independent M0 review, which is the user's decision.
 
 ## Blocker
-none
+None.
 
-## Next action
-Run `npm run test:integration:http` then `npm run test:baseline`.
+## Next intended action
+Stop. Do not begin M1.
