@@ -2,14 +2,17 @@
 
 This file records repository-level architecture clarifications. It does not restate or override the LOCKED documents. `SCOPE_LEVEL_3_LOCKED.md` is normative.
 
-## Current repository reality (after M0)
+## Current repository reality (after M1)
 
 ```text
-platform/
-  apps/backend      Medusa 2.21 + platform tenancy module (M0 proof)
+platform/                      npm workspaces, install-strategy=nested (ADR-019)
+  apps/backend                 Medusa 2.21 + tenancy module (M0) + storefront module (M1)
+  apps/storefront              storefront-core harness: exactly one manifest; not a runtime
+  packages/storefront-schema   strict storefront configuration schema
+  packages/storefront-core     versioned core: manifest contract, build materialisation, Next.js template
 ```
 
-No other Level 3 apps or packages exist yet. They are introduced by their milestones.
+The other Level 3 apps and packages (`apps/admin`, `packages/ai`, `packages/contracts`, `packages/integrations`, `packages/ui`, `packages/observability`) do not exist yet. They are introduced by their milestones.
 
 ## M0 clarifications (tenancy)
 
@@ -20,3 +23,12 @@ M0 accepted the shared Medusa foundation. See `docs/MEDUSA_TENANCY_DECISION.md` 
 - **Shopper storefront API.** The shopper-facing Medusa Store API is exposed through a deny-by-default tenant route policy. Cart workflows carry isolation hooks that hold below the HTTP layer.
 - **Shared reference data.** Regions, tax regions and payment-provider registration are platform-shared BG/EUR reference data, because Medusa assigns a country to only one region.
 - **Customers.** Medusa's guest customer is a platform-internal global record. Merchant-facing customer data is the tenant-scoped `Shopper`.
+
+## M1 clarifications (storefront projects)
+
+See `docs/STOREFRONT.md`. M1 realises Level 3 §2–§4 as follows:
+
+- **Creation.** A `StorefrontProject` (one per environment) and its `Deployment` records live in a platform `storefront` module. Creation is a single compensating workflow: environment, owned sales channel, publishable key and stock location, project, owner membership, first preview deployment.
+- **Build input.** Every build receives exactly one server-built, strictly validated **deployment manifest**. That manifest is where deployment isolation is enforced: its publishable key must resolve to the project's own environment.
+- **Providers.** Deployments go through a provider abstraction (ADR-017). The M1 adapters are `dry-run` and `local`. The local adapter builds each deployment in its own directory, with an allow-listed child environment that carries no backend secrets.
+- **Preview serving.** Preview hosts (`<handle>.preview.<platform-domain>`) resolve from the database on every request to one per-deployment static artifact. The local preview gateway serves files only; there is no shared multi-tenant storefront runtime.

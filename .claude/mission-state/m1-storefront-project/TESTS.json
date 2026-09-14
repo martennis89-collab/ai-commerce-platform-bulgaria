@@ -1,14 +1,108 @@
 {
   "mission": "m1-storefront-project",
-  "status": "BRIEF_DRAFT_AWAITING_APPROVAL",
-  "regression_gate": "M0 suites (unit 53, integration 43, baseline 6) must stay green",
+  "status": "COMPLETE_PENDING_REVIEW",
+  "commands": {
+    "packages": "npm run build:packages (platform/)",
+    "typecheck": "npm run typecheck (platform/apps/backend)",
+    "unit": "npm run test:unit",
+    "integration": "npm run test:integration:http",
+    "e2e": "npm run test:e2e",
+    "baseline": "npm run test:baseline",
+    "all": "npm run test:m1"
+  },
+  "regression_gate": {
+    "requirement": "M0 suites stay green after the workspace conversion and M1 changes",
+    "status": "PASS",
+    "evidence": "Full test:m1 run 2026-09-14: M0 unit 53/53, M0 integration 43/43, baseline 6/6 all green alongside M1"
+  },
+  "suite_results": {
+    "packages_build": "PASS (npm run build:packages from platform/)",
+    "typecheck": "PASS (tsc --noEmit, 0 errors)",
+    "unit_all": "PASS 119/119 (53 M0 + 66 M1: platform-config, storefront-contracts, local-deploy/gateway, harness)",
+    "integration_all": "PASS 56/56 (M0 43 + M1 13, dry-run provider)",
+    "e2e_m1": "PASS 4/4 (local provider, 4 real next build static exports, preview gateway)",
+    "baseline_m0": "PASS 6/6",
+    "total_automated_tests": 185
+  },
   "tests": [
-    { "id": "M1-T01", "requirement": "StoreEnvironment + StorefrontProject + Deployment creation is atomic with compensation", "status": "NOT_STARTED" },
-    { "id": "M1-T02", "requirement": "Maria and Petya previews each render only their own store name and products", "status": "NOT_STARTED" },
-    { "id": "M1-T03", "requirement": "Deployment A cannot be configured or rebuilt with environment B's publishable key or data", "status": "NOT_STARTED" },
-    { "id": "M1-T04", "requirement": "Build/deploy configuration contains exactly one publishable key owned by the project's environment", "status": "NOT_STARTED" },
-    { "id": "M1-T05", "requirement": "Preview and live hostnames are distinct; look-alike, unknown and suspended hosts never resolve", "status": "NOT_STARTED" },
-    { "id": "M1-T06", "requirement": "storefront-schema rejects invalid config; storefront-core version pinned per project", "status": "NOT_STARTED" },
-    { "id": "M1-T07", "requirement": "No shared multi-tenant storefront runtime exists", "status": "NOT_STARTED" }
-  ]
+    {
+      "id": "M1-T01a",
+      "requirement": "Creation produces StoreEnvironment, owned sales channel/publishable key/stock location, pinned StorefrontProject, owner membership and a ready preview deployment",
+      "status": "PASS",
+      "evidence": "m1-storefront-project.spec.ts M1-T01a"
+    },
+    {
+      "id": "M1-T01b",
+      "requirement": "A failure after commerce resources exist compensates everything (no environment, channel, key, location, ownership, project or deployment left)",
+      "status": "PASS_AFTER_FIX",
+      "evidence": "First run left the publishable key behind: Medusa's createApiKeysStep compensation cannot delete unrevoked keys. Fixed with a revoke-then-delete step"
+    },
+    {
+      "id": "M1-T01c",
+      "requirement": "Invalid, reserved and duplicate handles, an empty name, and tenant selectors in the body are rejected before creation; merchants cannot create environments",
+      "status": "PASS",
+      "evidence": "M1-T01c"
+    },
+    {
+      "id": "M1-T02",
+      "requirement": "Each preview URL renders only its own environment's store name and products",
+      "status": "PASS",
+      "evidence": "m1-preview-e2e.spec.ts M1-T02: maria-candles/petya-jewellery .preview.localhost each render only their own store name and product (real builds, gateway, x-platform-deployment matches)"
+    },
+    {
+      "id": "M1-T03a",
+      "requirement": "Merchants can only redeploy their own preview, with no parameters (environment/project/key/target selectors rejected; operator route forbidden)",
+      "status": "PASS",
+      "evidence": "M1-T03a"
+    },
+    {
+      "id": "M1-T03b",
+      "requirement": "The storefront typed tool cannot target another environment",
+      "status": "PASS",
+      "evidence": "M1-T03b"
+    },
+    {
+      "id": "M1-T03c",
+      "requirement": "Redeploy fails closed, without running the provider, for a foreign key, a key corrupted with another environment's channel, config injection, or an unavailable core version",
+      "status": "PASS",
+      "evidence": "M1-T03c (4 cases)"
+    },
+    {
+      "id": "M1-T03d",
+      "requirement": "Deployment rows whose hostname or environment disagree with the project are refused by the manifest builder",
+      "status": "PASS",
+      "evidence": "M1-T03d"
+    },
+    {
+      "id": "M1-T04",
+      "requirement": "The manifest carries exactly this environment's publishable key and no tenant id or other store data",
+      "status": "PASS",
+      "evidence": "M1-T04 (dry-run manifest); M1-T04e E2E artifact scan: no foreign publishable key and no backend secrets in any build file, own key present"
+    },
+    {
+      "id": "M1-T04u",
+      "requirement": "The local build child environment passes only allow-listed OS variables and never backend secrets",
+      "status": "PASS",
+      "evidence": "local-deploy.unit.spec.ts"
+    },
+    {
+      "id": "M1-T05",
+      "requirement": "Preview hosts resolve only their own ready deployment; live, look-alike, unknown and suspended hosts do not",
+      "status": "PASS",
+      "evidence": "M1-T05 (integration), platform-config.unit.spec.ts; E2E M1-T05e (live/look-alike/unknown hosts 404 at gateway) and M1-T05f (suspension stops preview immediately)"
+    },
+    {
+      "id": "M1-T06",
+      "requirement": "storefront-schema rejects invalid or extended config; manifest rejects extra keys, multiple keys, non-publishable keys and an unavailable core version; the core version is pinned per project",
+      "status": "PASS",
+      "evidence": "storefront-contracts.unit.spec.ts, M1-T01a, M1-T03c"
+    },
+    {
+      "id": "M1-T07",
+      "requirement": "No shared multi-tenant storefront runtime: per-deployment artifacts, one environment per hostname, the gateway serves static artifacts only, the harness takes exactly one manifest",
+      "status": "PASS",
+      "evidence": "M1-T07 (integration: unique artifacts, one environment per hostname), local-deploy.unit.spec.ts gateway suite (host routing, traversal, 404/405), harness.unit.spec.ts (harness exits 2 without exactly one manifest)"
+    }
+  ],
+  "last_full_run": "2026-09-14"
 }
