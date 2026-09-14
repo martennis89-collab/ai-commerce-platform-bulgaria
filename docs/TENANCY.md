@@ -65,7 +65,8 @@ Ownership is **fail-closed**: an unowned resource is invisible to, and unusable 
   2. resolve the scope from the publishable key;
   3. match a **deny-by-default** route policy (`STOREFRONT_ROUTE_POLICIES`);
   4. run the policy's ownership check;
-  5. install a response backstop that 500s if a response contains a product, cart or order not owned by the scope.
+  5. reject Store API `fields` expansion for Medusa `customer` / `customer_id`, because Medusa customers are global;
+  6. install a response backstop that strips top-level Medusa customer fields from cart/order payloads and 500s if a response contains a product, cart or order not owned by the scope.
 - `GET /store/products` → `tenantProductListFilter` intersects Medusa's filters with owned product ids. It never widens them, and an empty set never becomes "no filter".
 - `/merchant*` → `authenticate("user", ["bearer"])`, then `merchantExecutionContextMiddleware`. Merchant routes call `merchantCommerce(ctx)` and nothing else.
 - `/admin*` → `adminOperatorOnly`: merchant users get 403.
@@ -82,6 +83,7 @@ Every other core Store route returns 403. That includes product variants, collec
 
 - Checkout is guest-only. The same email is valid in any number of environments.
 - When an order is created, the `orderCreated` hook upserts `Shopper(env, lower(email))` and stores Medusa's global customer id internally (`medusa_customer_id`). That id is never serialised to merchants.
+- Store API cart/order responses also strip Medusa's global `customer` / `customer_id`, and requests for those fields are rejected. The storefront may use the order/cart email already present in the guest checkout payload, not Medusa's customer relation.
 - Merchant shopper views compute `order_count` and `lifetime_value` **only from orders owned by the environment**.
 - Merchant read field lists (`PRODUCT_FIELDS`, `ORDER_FIELDS`) must not traverse `customer` or use wildcards (`merchant-fields.unit.spec.ts`).
 - Medusa customer accounts (`/store/customers*`, `/auth/customer*`, cart customer transfer) are disabled because Medusa accounts are global across stores. Per-merchant accounts, if ever required, must be built on `Shopper`.

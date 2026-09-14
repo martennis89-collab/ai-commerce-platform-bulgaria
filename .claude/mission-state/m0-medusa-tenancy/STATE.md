@@ -25,7 +25,7 @@ Prove (or disprove) that shared Medusa v2 (2.21.0) plus custom tenancy modules c
 - Final verified run (2026-09-14):
   - tsc: clean.
   - Unit: 36/36.
-  - Protected integration: 36/36 (run 3).
+  - Protected integration: 38/38 after independent red-team hardening.
   - Vanilla baseline: 6/6.
 - Documentation: docs/TENANCY.md, docs/MEDUSA_TENANCY_DECISION.md, ARCHITECTURE.md, TESTS.json, baseline-observations.json.
 - Commit 9755c22 holds the code and tests; a docs commit follows it.
@@ -36,6 +36,7 @@ Evidence is in baseline-observations.json.
 - **Promotions.** Promo codes are global and apply across stores (NB09), and code uniqueness is global (NB14).
 - **Foreign variants.** Adding a foreign variant is blocked only incidentally, by inventory location, and succeeds when manage_inventory=false (NB03, NB04).
 - **Customers and admin.** There is one global guest customer per email (NB11), and the admin API has no tenant concept (NB12).
+- **Red-team customer exposure.** Independent review found Medusa Store cart/order responses could expose the global customer id/relation through defaults or field expansion. Storefront policy now strips top-level cart/order customer fields and rejects customer field expansion.
 - **Regions.** A country can belong to only one region, so regions must be platform-shared (NB15).
 - **Framework behaviour.**
   - The product list only filters by sales channel when more than one channel exists.

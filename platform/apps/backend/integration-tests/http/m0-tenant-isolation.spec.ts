@@ -426,6 +426,47 @@ medusaIntegrationTestRunner({
           (await call(api.post(`/auth/customer/emailpass/register`, { email: SHOPPER_EMAIL, password: "x" }))).status
         ).toBe(403)
       })
+
+      it("RT01 storefront order field expansion does not expose Medusa's global customer id", async () => {
+        const { data: orders } = await query().graph({
+          entity: "order",
+          fields: ["id", "customer_id"],
+          filters: { id: [mariaOrder.orderId, petyaOrder.orderId] },
+        })
+        const globalCustomerId = orders[0].customer_id
+        expect(globalCustomerId).toBeTruthy()
+
+        const res = await call(
+          api.get(
+            `/store/orders/${mariaOrder.orderId}?fields=%2Bcustomer_id,%2Bcustomer.id,%2Bcustomer.email`,
+            sfA()
+          )
+        )
+        expect(res.status).toBe(400)
+        const body = JSON.stringify(res.data)
+        expect(body).not.toContain(globalCustomerId)
+        expect(body).toContain("Medusa customer fields are platform-internal")
+      })
+
+      it("RT02 storefront cart field expansion cannot expose Medusa's global customer relation", async () => {
+        const { data: orders } = await query().graph({
+          entity: "order",
+          fields: ["id", "customer_id"],
+          filters: { id: [mariaOrder.orderId, petyaOrder.orderId] },
+        })
+        const globalCustomerId = orders[0].customer_id
+
+        const normal = await api.get(`/store/carts/${mariaOpen.cartId}`, sfA())
+        expect(JSON.stringify(normal.data)).not.toContain(globalCustomerId)
+        expect(normal.data.cart.customer).toBeUndefined()
+        expect(normal.data.cart.customer_id).toBeUndefined()
+
+        const res = await call(
+          api.get(`/store/carts/${mariaOpen.cartId}?fields=%2Bcustomer,%2Bcustomer.id`, sfA())
+        )
+        expect(res.status).toBe(400)
+        expect(JSON.stringify(res.data)).toContain("Medusa customer fields are platform-internal")
+      })
     })
 
     // ------------------------------------------------------ foreign identifiers

@@ -7,7 +7,7 @@
 | Date | 2026-09-14 |
 | Lead model | `claude-opus-5` (MODEL_ROUTING: tenancy/security → Opus, high) |
 | Commerce engine | Medusa `2.21.0` (latest at evaluation), Node 24.14, PostgreSQL 16 |
-| Status | Awaiting independent M0 review |
+| Status | Independent red-team finding remediated; awaiting final Opus review |
 
 ## Decision
 
@@ -61,7 +61,7 @@ Automated results, 2026-09-14. Full mapping in `.claude/mission-state/m0-medusa-
 |---|---|
 | `tsc --noEmit` | 0 errors |
 | Unit (`src/tenancy/__tests__`) | **36/36** |
-| Protected adversarial integration (`integration-tests/http/m0-tenant-isolation.spec.ts`) | **36/36** |
+| Protected adversarial integration (`integration-tests/http/m0-tenant-isolation.spec.ts`) | **38/38** |
 | Vanilla baseline characterization | 6/6 |
 
 | Invariant | Proven by |
@@ -71,6 +71,7 @@ Automated results, 2026-09-14. Full mapping in `.claude/mission-state/m0-medusa-
 | 3. Shopper action on A cannot touch B, even with valid B ids | T07–T16, T18, T25, T33 |
 | 4. Environment cannot be selected by client or tool | T26a–d, T27, T29, T33, unit selectors/tools |
 | 5. Same email shops independently without leakage | T02, T24, unit merchant-fields |
+| 5a. Medusa global customer relation stays platform-internal on Store API cart/order responses | RT01, RT02 |
 | 6. Authorization independent of sales channels | T09, T12, T26c, **T28** (B's product deliberately linked into A's channel and location stays invisible and unpurchasable) |
 | 7. Central, maintainable enforcement | Deny-by-default policy verified against Medusa's route files (unit), fail-closed ownership (T31), workflow hooks below HTTP (T09–T14), single merchant service and tool boundary (T27) |
 
@@ -94,6 +95,7 @@ Structural properties that keep later milestones safe by default:
 - **No tenant parameter exists.** Services and tools take an `ExecutionContext` and resource ids. A `TenantScope` cannot be constructed outside the resolvers.
 - **Data-level single ownership** is enforced by a Postgres unique index, not by convention.
 - **Upgrade tripwires.** A new Medusa Store route is denied until classified (unit test). A removed `orderCreated` hook fails T01/T02.
+- **Global customer data is stripped at the Store API boundary.** Red-team tests RT01/RT02 proved Medusa can serialize its global customer relation through cart/order query fields and defaults; the storefront policy now rejects customer field expansion and removes top-level cart/order customer fields before JSON leaves guarded routes.
 - **No Medusa core changes**, no forks, no patches: only Medusa-sanctioned extension points (module, middlewares, workflow hooks).
 - **Consistent with Level 3.** Level 3 already requires merchants and AI to act through typed, validated tools, so a tenant-scoped service layer is not extra work bolted onto Medusa. It is the layer the architecture mandates. Losing Medusa's admin API for merchants therefore costs nothing the architecture intended to use.
 
@@ -120,7 +122,7 @@ These follow from the evidence. Breaking any of them re-opens this decision.
 | 4 | Tenant context from trusted server execution | Yes (T26, T27, T29) |
 | 5 | Sales channels not relied on for authorization | Yes (T28, T12, T26c) |
 | 6 | Central and maintainable enforcement | Yes (§4, unit policy test, T31) |
-| 7 | Automated tests prove the above | Yes (78 automated tests) |
+| 7 | Automated tests prove the above | Yes (80 automated tests) |
 | 8 | No LOCKED requirement weakened | Yes, none changed |
 | 9 | No unreasonable ongoing hacks | Yes, §4; constraints in §5 are architectural rules, not per-feature patches |
 

@@ -44,6 +44,37 @@ const asArray = (v: unknown): string[] =>
 
 const noTenantData = async () => {}
 
+function requestedFields(query: any): string[] {
+  return asArray(query?.fields).flatMap((value) =>
+    String(value)
+      .split(",")
+      .map((field) => field.trim().replace(/^[+-]/, ""))
+      .filter(Boolean)
+  )
+}
+
+function rejectsGlobalCustomerFields(query: any) {
+  return requestedFields(query).some(
+    (field) =>
+      field === "customer_id" ||
+      field === "customer" ||
+      field === "*customer" ||
+      field.startsWith("customer.") ||
+      field.startsWith("*customer.")
+  )
+}
+
+function withoutGlobalCustomerFields(body: any) {
+  let next = body
+  for (const root of ["cart", "order"] as const) {
+    if (next?.[root] && typeof next[root] === "object") {
+      const { customer: _customer, customer_id: _customerId, ...resource } = next[root]
+      next = { ...next, [root]: resource }
+    }
+  }
+  return next
+}
+
 const productResponse = (body: any) => [
   {
     type: "product" as const,
@@ -307,6 +338,12 @@ export async function storefrontTenantGuard(
         "This storefront API route is not enabled for tenant storefronts"
       )
     }
+    if (rejectsGlobalCustomerFields(req.query)) {
+      throw new MedusaError(
+        MedusaError.Types.INVALID_DATA,
+        "Medusa customer fields are platform-internal; storefronts use tenant-scoped guest checkout"
+      )
+    }
 
     await match.policy.check({
       scope,
@@ -341,6 +378,7 @@ function installResponseBackstop(
     if (res.statusCode >= 400) {
       return originalJson(body)
     }
+    body = withoutGlobalCustomerFields(body)
     const checks = extract(body).filter((c) => c.ids.length)
     Promise.all(checks.map((c) => scope.assertOwned(c.type, c.ids)))
       .then(() => originalJson(body))

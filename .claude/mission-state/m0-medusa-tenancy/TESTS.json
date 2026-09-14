@@ -13,7 +13,7 @@
   "suite_results": {
     "typecheck": "PASS (tsc --noEmit, 0 errors)",
     "unit": "PASS 36/36 (5 suites)",
-    "integration_protected": "PASS 36/36 (integration-tests/http/m0-tenant-isolation.spec.ts, run 3)",
+    "integration_protected": "PASS 38/38 (integration-tests/http/m0-tenant-isolation.spec.ts, red-team run)",
     "baseline_vanilla_medusa": "PASS 6/6 characterization tests; observations in baseline-observations.json"
   },
   "tests": [
@@ -41,6 +41,8 @@
     { "id": "T22", "requirement": "Merchant token cannot reach native admin inventory APIs", "invariants": [2], "status": "PASS", "evidence": "T22 (403)" },
     { "id": "T23", "requirement": "Product mutation: update/draft/archive Store B product denied; unchanged; own update works", "invariants": [2], "status": "PASS", "evidence": "T23" },
     { "id": "T24", "requirement": "Shopper isolation: no Store B relationship/history/count/value; global customer and customer-account routes unreachable", "invariants": [5], "status": "PASS", "evidence": "T24" },
+    { "id": "RT01", "requirement": "Storefront order field expansion cannot expose Medusa's global customer id/relation", "invariants": [5], "status": "PASS_AFTER_FIX", "evidence": "Red-team test first reproduced customer_id/customer exposure via fields=+customer_id,+customer.id,+customer.email; storefront policy now rejects those fields with 400 and strips customer fields from cart/order responses" },
+    { "id": "RT02", "requirement": "Storefront cart responses and field expansion cannot expose Medusa's global customer id/relation", "invariants": [5], "status": "PASS_AFTER_FIX", "evidence": "Red-team test covers default cart response stripping and rejects fields=+customer,+customer.id with 400" },
     { "id": "T25", "requirement": "Foreign identifier sweep over every M0 tenant-sensitive merchant and store endpoint", "invariants": [1, 2, 3], "status": "PASS", "evidence": "T25 (18 endpoints, all 404, no Store B data in bodies, Petya cart unchanged)" },
     { "id": "T26a", "requirement": "StoreEnvironment spoofing (storefront): header/body/query/nested metadata selectors rejected", "invariants": [4], "status": "PASS", "evidence": "T26a (400)" },
     { "id": "T26b", "requirement": "StoreEnvironment spoofing (merchant): header/query/body selectors rejected", "invariants": [4], "status": "PASS", "evidence": "T26b (400)" },
