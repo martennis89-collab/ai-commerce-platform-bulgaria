@@ -79,7 +79,9 @@ export function aiWorkerConfig(): AiWorkerConfig {
     autostart: process.env.AI_WORKER_AUTOSTART !== "false",
     leaseMs,
     heartbeatMs: intEnv("AI_WORKER_HEARTBEAT_MS", Math.max(100, Math.floor(leaseMs / 3)), 50, leaseMs),
-    concurrency: intEnv("AI_WORKER_CONCURRENCY", 3, 1, 20),
+    // Kept well below the shared database pool (knex default 10 connections): each lane can hold
+    // a lock connection plus a working connection, and API traffic shares the same pool.
+    concurrency: intEnv("AI_WORKER_CONCURRENCY", 3, 1, 4),
     drainBudgetMs: intEnv("AI_WORKER_DRAIN_BUDGET_MS", 55_000, 1_000, 10 * 60 * 1000),
   }
 }

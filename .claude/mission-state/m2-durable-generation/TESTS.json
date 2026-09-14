@@ -7,6 +7,7 @@
     "date": "2026-09-14",
     "commands": [
       "npm run typecheck (backend) — clean; test files typechecked via tsconfig including integration-tests — clean",
+      "After independent review round 2 follow-ups (N1 pool-safe recompute, N2, N3, N5, L4), 2026-09-15: identical full regression re-run — typecheck 0 errors; unit 147; integration 78 (M2 17); baseline 6; e2e 5",
       "After independent review round 1 fixes (2026-09-15): typecheck (backend + tests) — 0 errors",
       "TEST_TYPE=unit jest — 12 suites, 147 tests passed (includes src/ai/__tests__/ai-contracts.unit.spec.ts, 24 tests)",
       "TEST_TYPE=integration:http jest — 3 suites, 78 tests passed (m0-tenant-isolation, m1-storefront-project, m2-durable-generation 17)",

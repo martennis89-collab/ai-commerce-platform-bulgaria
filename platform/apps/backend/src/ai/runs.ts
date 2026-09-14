@@ -195,7 +195,14 @@ export async function getRunSummary(ctx: ExecutionContext, runId: string) {
       error_code: errorCodeOf(t.error),
       finished_at: t.finished_at,
     })),
-    prompts: prompts.map((p) => ({ id: p.id, sequence: p.sequence, status: p.status, error_code: errorCodeOf(p.error) })),
+    prompts: prompts.map((p) => ({
+      id: p.id,
+      sequence: p.sequence,
+      status: p.status,
+      error_code: errorCodeOf(p.error),
+      // Part of the request (product, price, stock or publishing changes) was not applied.
+      unsupported: p.result?.unsupported === true,
+    })),
   }
 }
 
@@ -382,17 +389,25 @@ export async function recomputeRun(container: MedusaContainer, runId: string) {
   // Serialise recomputes per run: a status derived from a stale read can never land after a newer one.
   await knex.transaction(async (trx: any) => {
     await trx.raw(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`ai_run:${runId}`])
-    await recomputeRunLocked(container, runId)
+    // All reads and writes run on the lock's own connection, so a recompute never needs a second pool connection.
+    await recomputeRunLocked(trx, runId)
   })
 }
 
-async function recomputeRunLocked(container: MedusaContainer, runId: string) {
-  const ai = service(container)
-  const [run] = (await ai.listAgentRuns({ id: runId })) as any[]
+async function recomputeRunLocked(trx: any, runId: string) {
+  const query = async (sql: string, bindings: unknown[]) => ((await trx.raw(sql, bindings))?.rows ?? []) as any[]
+  const [run] = await query(
+    `SELECT id, started_at, cancel_requested_at, pause_requested_at FROM ai_run WHERE id = ? AND deleted_at IS NULL`,
+    [runId]
+  )
   if (!run) {
     return
   }
-  let tasks = ((await ai.listAgentTasks({ run_id: runId }, { take: null })) as any[]).filter((t) => !t.superseded_by)
+  const tasks = await query(
+    `SELECT id, task_key, status, depends_on, progress, current_step FROM ai_task
+      WHERE run_id = ? AND deleted_at IS NULL AND superseded_by IS NULL`,
+    [runId]
+  )
   const byKey = new Map(tasks.map((t) => [t.task_key, t]))
 
   for (const task of tasks) {
@@ -405,13 +420,17 @@ async function recomputeRunLocked(container: MedusaContainer, runId: string) {
     })
     const next = blocked ? "waiting" : "queued"
     if (next !== task.status) {
-      await sqlRows(container, `UPDATE ai_task SET status = ?, updated_at = now() WHERE id = ? AND status IN ('queued', 'waiting')`, [next, task.id])
+      await query(`UPDATE ai_task SET status = ?, updated_at = now() WHERE id = ? AND status IN ('queued', 'waiting')`, [next, task.id])
       task.status = next
     }
   }
 
-  const prompts = (await ai.listPromptQueueItems({ run_id: runId }, { take: null })) as any[]
-  const pendingPrompts = prompts.some((p) => p.status === "queued" || p.status === "processing")
+  const [{ pending }] = await query(
+    `SELECT count(*)::int AS pending FROM ai_prompt_queue
+      WHERE run_id = ? AND deleted_at IS NULL AND status IN ('queued', 'processing')`,
+    [runId]
+  )
+  const pendingPrompts = pending > 0
   const count = (status: string) => tasks.filter((t) => t.status === status).length
   const running = count("running")
   const allCompleted = tasks.length > 0 && tasks.every((t) => t.status === "completed")
@@ -441,8 +460,7 @@ async function recomputeRunLocked(container: MedusaContainer, runId: string) {
     : 0
   const current = tasks.find((t) => t.status === "running")
   const terminal = TERMINAL_STATUSES.includes(status)
-  await sqlRows(
-    container,
+  await query(
     `UPDATE ai_run
        SET status = ?, progress = ?, current_step = ?,
            finished_at = CASE WHEN ? THEN coalesce(finished_at, now()) ELSE NULL END,

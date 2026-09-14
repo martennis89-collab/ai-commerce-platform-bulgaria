@@ -73,9 +73,25 @@
     - Baseline: 6/6.
     - E2E: 5/5.
     - The M2-T15 live smoke is from before these fixes. Initial-generation prompts are unchanged; routing and the price guard are stricter.
+- **Independent review round 2 (at `9771c72`): ACCEPT WITH NOTES.**
+  - **Round 1 findings.** M1–M5 fixed. L1, L3, L5–L8, L10 and L11 fixed. L2 partially fixed. L4 mostly fixed. The three new tests (M2-T02c, T04b, T04c) would fail on the old code.
+  - **Follow-up fixes after round 2.** Re-tested on 2026-09-15:
+    - Typecheck: 0 errors.
+    - Unit: 147/147.
+    - Integration: 78/78 (M2 17/17).
+    - Baseline: 6/6.
+    - E2E: 5/5.
+    - **N1 (Medium, pool starvation).** `recomputeRun` does its advisory lock and all reads and writes on the lock's own transaction connection, with no second pool connection. `AI_WORKER_CONCURRENCY` is capped at 4, below the knex default pool of 10.
+    - **N2.** The sweep recomputes only runs idle for more than 5 seconds, at most 50 per tick.
+    - **N3.** The prompt lease token is re-checked right before tasks are inserted. Prompt summaries expose `unsupported` when part of a request was not applied.
+    - **N5.** The migration backfills `ai_generation.idempotency_key` from `payload`.
+    - **L4.** Anthropic 408 and 409 stay retryable.
+  - **Documented, not changed.**
+    - N4: a paused run stays active, never expires, and each resume restarts the deadline, bounded by the model budget.
+    - L2 remainder: `assertNoOtherActiveRun` is not under the start lock, and resume does not check it.
+    - A cheap live smoke re-run before tagging is advisable.
 - **Pending.**
-  - Independent review.
-  - mission-gate-review.
+  - mission-gate-review on the pushed head.
   - Merge and tag only on user instruction.
 
 ## User-approved decisions

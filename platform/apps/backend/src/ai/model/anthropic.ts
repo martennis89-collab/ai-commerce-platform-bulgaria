@@ -46,7 +46,7 @@ export class AnthropicModelProvider implements ModelProvider {
         // The SDK's own structured-output parsing failed: invalid output, not worth retrying.
         throw new ModelOutputError("invalid_output", String((error as Error)?.message ?? error).slice(0, 500))
       }
-      if (typeof error.status === "number" && error.status >= 400 && error.status < 500) {
+      if (typeof error.status === "number" && error.status >= 400 && error.status < 500 && ![408, 409].includes(error.status)) {
         // Bad request, authentication, permission, not found, too large: retrying cannot help.
         throw new ModelRequestError(error.status, error.message)
       }

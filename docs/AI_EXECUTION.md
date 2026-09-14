@@ -126,7 +126,18 @@ Prompts (`src/ai/prompts.ts`) require concise Bulgarian, forbid invented prices,
 | `AI_MAX_UPLOAD_BYTES` | 5242880 |
 | `AI_MAX_AUTO_RISK` | 1 |
 
-Run-level limits are captured on the run when it starts. Worker tuning: `AI_WORKER_LEASE_MS` (60000), `AI_WORKER_HEARTBEAT_MS` (lease/3), `AI_WORKER_CONCURRENCY` (3), `AI_WORKER_DRAIN_BUDGET_MS` (55000).
+Run-level limits are captured on the run when it starts. Worker tuning:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `AI_WORKER_LEASE_MS` | 60000 | |
+| `AI_WORKER_HEARTBEAT_MS` | lease/3 | |
+| `AI_WORKER_CONCURRENCY` | 3 | Maximum 4, kept well below the shared database pool (knex default 10 connections). |
+| `AI_WORKER_DRAIN_BUDGET_MS` | 55000 | |
+
+Run recompute takes its advisory lock and does all its reads and writes on one transaction connection.
+
+**Pause and deadlines.** A paused run keeps counting as active, so the store cannot start another generation until the merchant resumes or cancels it. A paused run never expires. Each resume restarts the run deadline, so a run that is paused and resumed repeatedly stays alive, bounded by its model-call and token budgets.
 
 ## Data
 

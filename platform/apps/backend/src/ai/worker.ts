@@ -350,7 +350,8 @@ export async function sweepExpired(container: MedusaContainer) {
     container,
     `SELECT id AS run_id FROM ai_run
       WHERE deleted_at IS NULL AND status NOT IN ('completed', 'failed', 'cancelled')
-      ORDER BY updated_at LIMIT 200`
+        AND updated_at < now() - interval '5 seconds'
+      ORDER BY updated_at LIMIT 50`
   )
   for (const runId of new Set([...touched, ...expiredRuns, ...healed, ...active].map((r) => r.run_id))) {
     await recomputeRun(container, runId)
@@ -470,6 +471,11 @@ export async function processPromptQueues(container: MedusaContainer, workerId: 
         targets.push("storefront")
       }
 
+      const held = await sqlRows(container, `SELECT 1 FROM ai_prompt_queue WHERE id = ? AND lease_token = ?`, [prompt.id, token])
+      if (!held.length) {
+        // The lease expired while routing; another worker owns this prompt now.
+        continue
+      }
       let created: any[]
       try {
         created = (await service.createAgentTasks(
