@@ -22,7 +22,7 @@ import type StorefrontModuleService from "../modules/storefront/service"
 import { requestPreviewDeployment } from "../storefront/deployments"
 import { ExecutionContext, Permission, requirePermission } from "../tenancy/context"
 import { findTenantSelectors, isForbiddenTenantKey } from "../tenancy/selectors"
-import { aiLimits } from "./config"
+import { AiLimits, aiLimits } from "./config"
 import { LeaseLostError, LimitReachedError, ToolRejectedError } from "./errors"
 import { BrandProposalSchema, HomeCopySchema, OfferSuggestionSchema, priceStatedByMerchant } from "./schemas"
 import { sqlRows } from "./sql"
@@ -35,6 +35,8 @@ export type ToolRuntime = {
   actor: { user_id: string; provider: string | null; model: string | null }
   /** Merchant-authored text (description + typed facts), used by fact guards. */
   merchantText: string
+  /** Limits captured on the run at start; falls back to current server configuration. */
+  limits?: AiLimits
 }
 
 export type AiTool<S extends z.ZodTypeAny = z.ZodTypeAny> = {
@@ -182,7 +184,7 @@ const createProductDraft = defineAiTool({
         { run_id: rt.runId, kind: "product_draft", store_environment_id: env },
         { take: null }
       )) as any[]
-      if (drafts.length >= aiLimits().maxProductDrafts) {
+      if (drafts.length >= (rt.limits ?? aiLimits()).maxProductDrafts) {
         throw new LimitReachedError("maximum product drafts for this run")
       }
       generation = await service.createGenerations({
@@ -413,7 +415,8 @@ export async function executeAiTool(
       parsed.error.issues.map((i) => `${i.path.join(".") || "$"}: ${i.message}`).join("; ")
     )
   }
-  if (tool.risk > aiLimits().maxAutoRisk) {
+  const limits = rt.limits ?? aiLimits()
+  if (tool.risk > limits.maxAutoRisk) {
     throw new ToolRejectedError("risk", `${toolName} (risk ${tool.risk}) needs merchant confirmation`)
   }
   requirePermission(rt.ctx, tool.permission)
@@ -436,7 +439,6 @@ export async function executeAiTool(
   }
 
   // Per-task budget, fenced by the lease: a worker that lost its lease cannot act.
-  const limits = aiLimits()
   const counted = await sqlRows(
     container,
     `UPDATE ai_task SET tool_calls = tool_calls + 1, updated_at = now()
@@ -489,7 +491,8 @@ export async function executeAiTool(
   }
 
   try {
-    const result = await tool.handler(rt, input, idempotencyKey)
+    // Handlers receive the run-scoped key, so resource lookups (generations, deployments) never collide across runs.
+    const result = await tool.handler(rt, input, key)
     await sqlRows(
       container,
       `UPDATE ai_action SET status = 'succeeded', result = ?::jsonb, finished_at = now(), updated_at = now() WHERE id = ?`,

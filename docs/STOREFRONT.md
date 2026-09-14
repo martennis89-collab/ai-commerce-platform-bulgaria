@@ -85,10 +85,13 @@ npm run preview:gateway     # serves ready previews on http://<handle>.preview.l
 
 ## 6. storefront-core and storefront-schema
 
-- `@platform/storefront-schema`: a strict zod config (`schema_version`, store name, `bg-BG`, `eur`, theme preset). It is the base for schema-first editing (ADR-007).
-- `@platform/storefront-core` (versioned; `0.1.0` in M1):
+- `@platform/storefront-schema` (schema v2 since M2): a strict zod config with `schema_version: 2`, store (name, `bg-BG`, `eur`), theme tokens and a fixed home page. It is the base for schema-first editing (ADR-007).
+  - Theme: `preset`, `typography` (`editorial` | `modern`), `corner` (`soft` | `square`) and six hex colours (`paper`, `ink`, `muted`, `accent`, `accent_ink`, `line`). Contrast is validated: ink/paper ≥ 7, muted/paper ≥ 4.5, accent_ink/accent ≥ 4.5, accent/paper ≥ 3.
+  - Home: `hero` (headline, subheadline, CTA label), `product_grid` (title, empty state), `about` (title, body), all length-bounded plain text.
+  - `parseStorefrontConfig` upgrades v1 configs to v2 with the Bulgarian defaults.
+- `@platform/storefront-core` (versioned; `0.1.0` in M1, `0.2.0` in M2):
   - the manifest contract (`validateDeploymentManifest`) and `materializeBuild`;
-  - a Next.js App Router JSX template (ADR-016). It renders a mobile-first `lang="bg"` shell with the store name and a catalogue read at build time through `@medusajs/js-sdk`, using the manifest's publishable key. It exposes `platform-deployment` and `storefront-core-version` meta tags.
+  - a Next.js App Router JSX template (ADR-016). It renders a mobile-first `lang="bg"` page themed only through CSS variables from the validated theme tokens: header, hero, product grid (published catalogue read at build time through `@medusajs/js-sdk` with the manifest's publishable key, or the empty state) and an about section shown only when it has text. It exposes `platform-deployment` and `storefront-core-version` meta tags.
 - `apps/storefront`: a local harness that runs `next dev` for exactly **one** manifest and refuses zero or several. It is not a runtime for merchant stores (Level 3 §2).
 - Monorepo (ADR-019): npm workspaces with `install-strategy=nested`. The backend keeps Medusa's React 18 tree, and `storefront-core` keeps Next 16 with React 19.
 
@@ -101,18 +104,19 @@ npm run preview:gateway     # serves ready previews on http://<handle>.preview.l
 | Merchant | `GET /merchant/storefront` | Returns the caller's own project and deployment summaries. A failed deployment shows only `"Deployment failed"`; build output, paths and backend URLs stay operator-side. |
 | Merchant | `POST /merchant/storefront/preview-deployments` | The body must be `{}`. Project, environment, key and target are all server-derived; tenant selectors get 400. |
 | Tool | `storefront.request_preview_deployment` (risk 1, `storefront:deploy`) | Takes no arguments. |
+| AI tool (M2) | `storefront.update_home`, `brand.apply`, `storefront.request_preview_deployment` | Audited, idempotent AI tool calls from a run's tasks; the result must parse as schema v2 and the preview request is keyed by run (`request_key`). See `docs/AI_EXECUTION.md`. |
 
 Permissions: `owner` has `storefront:read` and `storefront:deploy`; `staff` has `storefront:read`.
 
 ## 8. Known limitations
 
-- **Deployment execution.** It runs from an in-process subscriber. The `queued → building` transition is not atomic, and a restart mid-build leaves a deployment in `building`. Durable, resumable execution arrives with M2 (`AgentRun`/`AgentTask`).
+- **Deployment execution (durable since M2).** `queued → building` is an atomic Postgres lease claim with a fencing token; only the lease holder can mark a deployment `ready` or `failed`. A build whose worker dies keeps `building` until its 15-minute lease expires, then any worker (`drainDeployments`, run by the scheduled worker job or `npm run ai:worker`) re-claims it, up to 3 attempts. The `storefront.deployment.queued` subscriber only triggers the same leased path immediately. A live build that exceeds the lease would be re-claimed; the local build timeout (10 minutes) keeps builds inside it.
 - **Build timing.** Local builds can run concurrently across projects. There is a 10-minute build timeout; logs go to `builds/<id>/build.log`.
 - **Old artifacts.** Superseded artifacts are not garbage-collected yet.
 - **Build-time catalogue.** The catalogue is read at build time, so catalogue changes need a redeploy until M4/M5 add dynamic reads.
-- **Config coverage.** Only the store name, locale, currency and theme preset exist in config. Pages, sections and theme tokens arrive with M2/M3.
+- **Config coverage.** Schema v2 covers the store, theme tokens and one fixed home page (hero, product grid, about). Additional pages, section choice and ordering, and editing arrive with M3.
 - **Harness environment.** The dev-only harness (`apps/storefront`) passes the developer's whole environment to `next dev`. Merchant builds always use the local provider's allow-list.
 - **No rate limits.** Nothing limits how many redeploys a merchant can request yet (M11).
-- **Millisecond ordering (review N-a).** "Newest ready deployment" uses Medusa ids, which are ULIDs and not monotonic within a single millisecond. Two redeploys of the same project in the same millisecond (the same tenant's own builds) may settle on either one. Order by `created_at` then id, or use a monotonic sequence, when durable runs land in M2.
+- **Millisecond ordering (review N-a).** "Newest ready deployment" uses Medusa ids, which are ULIDs and not monotonic within a single millisecond. Two redeploys of the same project in the same millisecond (the same tenant's own builds) may settle on either one. M2 made execution durable but kept id ordering; add a monotonic sequence before merchants can trigger bursts of redeploys (M3 editing).
 - **Artifact path check (review N-c).** The gateway requires an artifact's real path to lie inside the deploy root, not to equal `builds/<deployment_id>/out`. `artifact_ref` is written only by the server; tighten this before any user-influenced artifact paths exist (M3 source editing).
 - **Windows shutdown (review N-d).** Gateway shutdown on SIGINT/SIGTERM waits for keep-alive connections, and is untested on Windows.

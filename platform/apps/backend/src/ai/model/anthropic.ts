@@ -41,6 +41,10 @@ export class AnthropicModelProvider implements ModelProvider {
       ) {
         throw new ModelTransientError(error.message)
       }
+      if (!(error instanceof Anthropic.APIError)) {
+        // The SDK's own structured-output parsing failed: invalid output, not worth retrying.
+        throw new ModelOutputError("invalid_output", String((error as Error)?.message ?? error).slice(0, 500))
+      }
       throw error
     }
 

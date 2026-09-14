@@ -102,7 +102,8 @@ export function priceStatedByMerchant(price: number, merchantText: string): bool
     forms.add(String(price))
     forms.add(String(price).replace(".", ","))
   }
+  // The amount must be a whole number token: "18" does not match inside "118", "18.5" or "18,50".
   return [...forms].some((form) =>
-    new RegExp(`(^|[^0-9.,])${escapeRegex(form)}([^0-9]|$)`).test(merchantText)
+    new RegExp(`(^|[^0-9.,])${escapeRegex(form)}(?![.,]?[0-9])`).test(merchantText)
   )
 }

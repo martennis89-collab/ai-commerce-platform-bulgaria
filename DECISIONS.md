@@ -23,6 +23,7 @@
 | ADR-017 | StorefrontProject deployments go through a provider abstraction. The first adapter is local and credential-free, serving per-deployment build artifacts on `*.preview.localhost`. The real hosting provider remains open and requires its own ADR (user-approved for M1). |
 | ADR-018 | Platform hostnames: live `<handle>.<platform-domain>`, preview `<handle>.preview.<platform-domain>`. The domain is a placeholder until the domain decision (user-approved for M1). |
 | ADR-019 | `platform/` is an npm-workspaces monorepo (`apps/*`, `packages/*`) with no additional build orchestrator yet (user-approved for M1). |
+| ADR-020 | M2 durable generation (user-approved D1–D8, B1): Anthropic behind a swappable provider with env-configured model ids (defaults `claude-sonnet-5` generation, `claude-haiku-4-5` extraction); Postgres-backed `AgentRun`/`AgentTask`/`PromptQueue` with lease-and-fencing workers in the same backend (scheduled job or `medusa exec` worker), no Redis/external queue; every model effect is an audited, idempotent AI tool call; product drafts are Medusa draft products with provenance; merchant-uploaded photos only; storefront-schema v2 with a fixed Bulgarian home page; conservative env-configured limits. Deterministic fake model in CI; a real-provider smoke is required before acceptance. See `docs/AI_EXECUTION.md`. |
 
 ## Explicitly open / not locked
 

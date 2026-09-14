@@ -124,20 +124,23 @@ async function finishTask(
             finished_at = CASE WHEN ? IN ('completed', 'failed', 'cancelled') THEN now() ELSE NULL END,
             lease_token = NULL, lease_owner = NULL,
             lease_expires_at = CASE WHEN ? = 'queued' THEN now() + interval '500 milliseconds' ELSE NULL END,
+            -- A merchant pause is not a failed attempt.
+            attempt = CASE WHEN ? = 'paused' THEN greatest(attempt - 1, 0) ELSE attempt END,
             updated_at = now()
       WHERE id = ? AND lease_token = ?
       RETURNING id`,
     [
-      outcome.status,
-      isCompleted,
-      JSON.stringify(isCompleted ? outcome.result : null),
-      isCompleted ? null : (outcome as any).error ?? null,
-      isCompleted,
-      isCompleted,
-      outcome.status,
-      outcome.status,
-      task.id,
-      token,
+      outcome.status, // $1 status
+      isCompleted, // $2 result?
+      JSON.stringify(isCompleted ? outcome.result : null), // $3
+      isCompleted ? null : (outcome as any).error ?? null, // $4 error
+      isCompleted, // $5 progress
+      isCompleted, // $6 current_step
+      outcome.status, // $7 finished_at
+      outcome.status, // $8 lease_expires_at backoff
+      outcome.status, // $9 attempt (pause)
+      task.id, // $10
+      token, // $11
     ]
   )
   return rows.length > 0
@@ -252,7 +255,7 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
       async tool(name, args, idempotencyKey) {
         await checkpoint()
         return executeAiTool(
-          { ctx, runId: run.id, taskId: task.id, leaseToken: token, actor: { user_id: ctx.user.id, ...lastModel }, merchantText },
+          { ctx, runId: run.id, taskId: task.id, leaseToken: token, actor: { user_id: ctx.user.id, ...lastModel }, merchantText, limits },
           name,
           args,
           `${task.task_key}:${idempotencyKey}`

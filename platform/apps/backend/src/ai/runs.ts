@@ -116,10 +116,10 @@ export async function startInitialGeneration(ctx: ExecutionContext, rawBody: unk
   const [counts] = await sqlRows(
     container,
     `SELECT
-       count(*) FILTER (WHERE status = ANY(?)) AS active,
+       count(*) FILTER (WHERE status IN (${ACTIVE_RUN_STATUSES.map(() => "?").join(", ")})) AS active,
        count(*) FILTER (WHERE created_at > now() - interval '1 day') AS today
      FROM ai_run WHERE store_environment_id = ? AND deleted_at IS NULL`,
-    [ACTIVE_RUN_STATUSES, env]
+    [...ACTIVE_RUN_STATUSES, env]
   )
   if (Number(counts.active) >= limits.maxActiveRunsPerStore) {
     throw limit("an initial generation is already running for this store")
