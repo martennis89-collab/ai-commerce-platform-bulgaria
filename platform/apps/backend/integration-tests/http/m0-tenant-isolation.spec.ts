@@ -467,6 +467,94 @@ medusaIntegrationTestRunner({
         expect(res.status).toBe(400)
         expect(JSON.stringify(res.data)).toContain("Medusa customer fields are platform-internal")
       })
+
+      const globalCustomerIdOf = async (orderId: string) => {
+        const { data } = await query().graph({ entity: "order", fields: ["customer_id"], filters: { id: orderId } })
+        const id = data[0].customer_id as string
+        expect(id).toMatch(/^cus_/)
+        return id
+      }
+
+      it("RT03 no default storefront response on any cart/order route carries the global customer id", async () => {
+        const globalCustomerId = await globalCustomerIdOf(mariaOrder.orderId)
+        const h = sfA()
+        const leaks: string[] = []
+        const probe = (name: string, res: { status: number; data: any }) => {
+          const body = JSON.stringify(res.data ?? "")
+          if (body.includes(globalCustomerId) || /"customer"\s*:\s*\{/.test(body)) {
+            leaks.push(`${name} (${res.status})`)
+          }
+          return res
+        }
+
+        const created = probe("POST /store/carts", await call(api.post("/store/carts", { region_id: regionId, email: SHOPPER_EMAIL }, h)))
+        const cartId = created.data.cart.id
+        const added = probe(
+          "POST line-items",
+          await call(api.post(`/store/carts/${cartId}/line-items`, { variant_id: maria.variantId, quantity: 2 }, h))
+        )
+        const lineId = added.data.cart.items[0].id
+        probe("POST line-items/:line_id", await call(api.post(`/store/carts/${cartId}/line-items/${lineId}`, { quantity: 1 }, h)))
+        probe(
+          "POST /store/carts/:id",
+          await call(api.post(`/store/carts/${cartId}`, { shipping_address: { first_name: "T", last_name: "S", address_1: "a", city: "Sofia", country_code: "bg", postal_code: "1000" } }, h))
+        )
+        probe("GET /store/carts/:id", await call(api.get(`/store/carts/${cartId}`, h)))
+        probe("POST promotions", await call(api.post(`/store/carts/${cartId}/promotions`, { promo_codes: [MARIA.promoCode] }, h)))
+        probe("DELETE promotions", await call(api.delete(`/store/carts/${cartId}/promotions`, { ...h, data: { promo_codes: [MARIA.promoCode] } })))
+        const options = probe("GET shipping-options", await call(api.get(`/store/shipping-options?cart_id=${cartId}`, h)))
+        probe(
+          "POST shipping-methods",
+          await call(api.post(`/store/carts/${cartId}/shipping-methods`, { option_id: options.data.shipping_options[0].id }, h))
+        )
+        const pc = probe("POST payment-collections", await call(api.post(`/store/payment-collections`, { cart_id: cartId }, h)))
+        probe(
+          "POST payment-sessions",
+          await call(api.post(`/store/payment-collections/${pc.data.payment_collection.id}/payment-sessions`, { provider_id: "pp_system_default" }, h))
+        )
+        const extra = await api.post(`/store/carts/${cartId}/line-items`, { variant_id: maria.variantId, quantity: 1 }, h)
+        const extraLine = extra.data.cart.items.find((i: any) => i.id !== lineId)?.id ?? extra.data.cart.items[0].id
+        probe("DELETE line-items/:line_id", await call(api.delete(`/store/carts/${cartId}/line-items/${extraLine}`, h)))
+        await api.post(`/store/payment-collections/${pc.data.payment_collection.id}/payment-sessions`, { provider_id: "pp_system_default" }, h)
+        const completed = probe("POST complete", await call(api.post(`/store/carts/${cartId}/complete`, {}, h)))
+        probe("GET /store/orders/:id", await call(api.get(`/store/orders/${completed.data.order?.id ?? mariaOrder.orderId}`, h)))
+
+        expect(leaks).toEqual([])
+      })
+
+      it("RT04 field-expansion variants cannot reach the global customer id through nested paths or odd encodings", async () => {
+        const globalCustomerId = await globalCustomerIdOf(mariaOrder.orderId)
+        const leaks: string[] = []
+        const paths = [
+          `/store/orders/${mariaOrder.orderId}?fields=%2Bshipping_address.customer_id`,
+          `/store/orders/${mariaOrder.orderId}?fields=*shipping_address`,
+          `/store/orders/${mariaOrder.orderId}?fields=*billing_address`,
+          `/store/orders/${mariaOrder.orderId}?fields=*items`,
+          `/store/orders/${mariaOrder.orderId}?fields[]=%2Bcustomer_id`,
+          `/store/orders/${mariaOrder.orderId}?fields[x]=%2Bcustomer_id`,
+          `/store/orders/${mariaOrder.orderId}?fields=%2Bid&fields=%2Bcustomer_id`,
+          `/store/orders/${mariaOrder.orderId}?fields=%20%2Bcustomer_id`,
+          `/store/orders/${mariaOrder.orderId}?fields=%2Bcustomer_id%20`,
+          `/store/orders/${mariaOrder.orderId}?fields=*`,
+          `/store/carts/${mariaOpen.cartId}?fields=%2Bshipping_address.customer_id`,
+          `/store/carts/${mariaOpen.cartId}?fields=*shipping_address`,
+          `/store/carts/${mariaOpen.cartId}?fields=*items`,
+          `/store/carts/${mariaOpen.cartId}?fields=*payment_collection`,
+          `/store/carts/${mariaOpen.cartId}?fields=*`,
+        ]
+        const observed: Record<string, number> = {}
+        for (const p of paths) {
+          const res = await call(api.get(p, sfA()))
+          observed[p] = res.status
+          const body = JSON.stringify(res.data ?? "")
+          if (body.includes(globalCustomerId)) {
+            leaks.push(`${p} (${res.status})`)
+          }
+        }
+        // eslint-disable-next-line no-console
+        console.log("RT04 observed statuses", observed)
+        expect(leaks).toEqual([])
+      })
     })
 
     // ------------------------------------------------------ foreign identifiers

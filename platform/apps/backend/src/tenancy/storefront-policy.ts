@@ -44,35 +44,53 @@ const asArray = (v: unknown): string[] =>
 
 const noTenantData = async () => {}
 
+/**
+ * Medusa's Customer is one global row per email across all stores, so neither
+ * its id nor its relation may reach a (merchant-controlled) storefront.
+ */
+const GLOBAL_CUSTOMER_KEYS = new Set(["customer", "customer_id"])
+
 function requestedFields(query: any): string[] {
-  return asArray(query?.fields).flatMap((value) =>
+  const raw = query?.fields
+  const values =
+    raw && typeof raw === "object" && !Array.isArray(raw) ? Object.values(raw) : asArray(raw)
+  return values.flatMap((value) =>
     String(value)
       .split(",")
-      .map((field) => field.trim().replace(/^[+-]/, ""))
+      .map((field) => field.trim())
       .filter(Boolean)
   )
 }
 
-function rejectsGlobalCustomerFields(query: any) {
-  return requestedFields(query).some(
-    (field) =>
-      field === "customer_id" ||
-      field === "customer" ||
-      field === "*customer" ||
-      field.startsWith("customer.") ||
-      field.startsWith("*customer.")
+/** Rejects any requested field path with a `customer` / `customer_id` segment at any depth. */
+export function rejectsGlobalCustomerFields(query: any) {
+  return requestedFields(query).some((field) =>
+    field
+      .replace(/^[+\-]/, "")
+      .split(".")
+      .some((segment) => GLOBAL_CUSTOMER_KEYS.has(segment.replace(/^\*/, "")))
   )
 }
 
-function withoutGlobalCustomerFields(body: any) {
-  let next = body
-  for (const root of ["cart", "order"] as const) {
-    if (next?.[root] && typeof next[root] === "object") {
-      const { customer: _customer, customer_id: _customerId, ...resource } = next[root]
-      next = { ...next, [root]: resource }
+/** Removes `customer` / `customer_id` keys at any depth (e.g. `parent` carts, nested orders). */
+export function stripGlobalCustomerFields(value: any, depth = 0): any {
+  if (depth > 50 || value === null || typeof value !== "object") {
+    return value
+  }
+  // Serialise exactly as res.json would (Medusa BigNumber totals, Dates) before walking.
+  if (typeof value.toJSON === "function") {
+    return stripGlobalCustomerFields(value.toJSON(), depth + 1)
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => stripGlobalCustomerFields(v, depth + 1))
+  }
+  const out: Record<string, unknown> = {}
+  for (const [key, v] of Object.entries(value)) {
+    if (!GLOBAL_CUSTOMER_KEYS.has(key)) {
+      out[key] = stripGlobalCustomerFields(v, depth + 1)
     }
   }
-  return next
+  return out
 }
 
 const productResponse = (body: any) => [
@@ -354,9 +372,7 @@ export async function storefrontTenantGuard(
 
     req.tenantScope = scope
 
-    if (match.policy.response) {
-      installResponseBackstop(res, scope, match.policy.response)
-    }
+    installResponseGuard(res, scope, match.policy.response)
     return next()
   } catch (e) {
     return next(e)
@@ -364,21 +380,23 @@ export async function storefrontTenantGuard(
 }
 
 /**
- * Last line of defence: before any JSON leaves a guarded route, every tenant
- * resource in it must be owned by the request's environment. A violation here
- * means an upstream layer is broken, so the response is replaced by a 500.
+ * Last line of defence, installed on every guarded storefront route:
+ * 1. strips Medusa's global customer id/relation from the payload at any depth;
+ * 2. where the policy declares tenant resources, every one of them must be owned
+ *    by the request's environment. A violation means an upstream layer is
+ *    broken, so the response is replaced by a 500.
  */
-function installResponseBackstop(
+function installResponseGuard(
   res: MedusaResponse,
   scope: TenantScope,
-  extract: NonNullable<StorefrontRoutePolicy["response"]>
+  extract: StorefrontRoutePolicy["response"]
 ) {
   const originalJson = res.json.bind(res)
-  ;(res as any).json = (body: any) => {
-    if (res.statusCode >= 400) {
+  ;(res as any).json = (rawBody: any) => {
+    const body = stripGlobalCustomerFields(rawBody)
+    if (res.statusCode >= 400 || !extract) {
       return originalJson(body)
     }
-    body = withoutGlobalCustomerFields(body)
     const checks = extract(body).filter((c) => c.ids.length)
     Promise.all(checks.map((c) => scope.assertOwned(c.type, c.ids)))
       .then(() => originalJson(body))

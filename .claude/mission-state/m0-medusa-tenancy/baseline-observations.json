@@ -3,13 +3,13 @@
   "observations": {
     "NB01_store_A_get_B_product_by_id": {
       "status": 404,
-      "message": "Product with id: prod_01M2EKJTX50CA18NXDGQ3BRHR8 was not found",
+      "message": "Product with id: prod_01M2EP8H5E9R77K5JBMVE7B8C8 was not found",
       "type": "not_found"
     },
     "NB02_store_A_list_contains_B_product": false,
     "NB03_add_B_variant_managed_inventory_to_A_cart": {
       "status": 400,
-      "message": "Sales channel sc_01M2EKJTBC7H02JXHQBZ86Y7SB is not associated with any stock location for variant variant_01M2EKJTZ7G14VPQ5FG56ZV0ZZ.",
+      "message": "Sales channel sc_01M2EP8GEV3TG25SF7CCASK5K2 is not associated with any stock location for variant variant_01M2EP8H7KV3JKTX9YDKN26M15.",
       "type": "invalid_data"
     },
     "NB04_add_B_variant_unmanaged_inventory_to_A_cart": {
