@@ -1,0 +1,6 @@
+import type { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
+import { commerceFor } from "../../../../../tenancy/merchant-guard"
+
+export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
+  res.json({ order: await commerceFor(req).completeOrder(req.params.id) })
+}

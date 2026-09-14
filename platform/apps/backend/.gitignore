@@ -1,0 +1,8 @@
+/dist
+.env
+/uploads
+/node_modules
+coverage
+build
+.cache
+.medusa
