@@ -1,6 +1,6 @@
 {
   "mission": "m2-durable-generation",
-  "status": "ALL_TESTS_PASS_AWAITING_INDEPENDENT_REVIEW_AND_GATE",
+  "status": "ACCEPTED_MERGED_ea0a8f1_TAGGED_m2-accepted",
   "regression_gate": "M0 and M1 suites must stay green",
   "provider_policy": "Deterministic suites use the fake model provider; one opt-in live-provider smoke test runs only when credentials are supplied (B1). M2 acceptance requires it.",
   "evidence": {

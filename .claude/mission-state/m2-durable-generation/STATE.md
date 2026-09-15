@@ -1,7 +1,7 @@
 # M2 — Durable parallel initial generation — STATE
 
 ## Status
-**APPROVED (2026-09-14). Implementing on `mission/m2-durable-generation`. Do not start M3.**
+**ACCEPTED, MERGED AND TAGGED (2026-09-15).** PR #3 was merged into `main` as merge commit `ea0a8f1`, and the annotated tag `m2-accepted` is pushed and verified to peel to that commit. M3 has not started.
 
 ## Progress (2026-09-14, local only, not pushed)
 - **Commits.**
@@ -90,9 +90,9 @@
     - N4: a paused run stays active, never expires, and each resume restarts the deadline, bounded by the model budget.
     - L2 remainder: `assertNoOtherActiveRun` is not under the start lock, and resume does not check it.
     - A cheap live smoke re-run before tagging is advisable.
-- **Pending.**
-  - mission-gate-review on the pushed head.
-  - Merge and tag only on user instruction.
+- **mission-gate-review: ACCEPTED** at `a36e239`: mission branch only, scope inside M2, no locked document changed, PR draft into `main` with a matching head, and the full regression plus the live smoke recorded.
+- **Merged and tagged (2026-09-15, on user instruction).** PR #3 merged into `main` as `ea0a8f1`; annotated tag `m2-accepted` pushed, peeling to the merge commit locally and on the remote.
+- **M3 has not started.**
 
 ## User-approved decisions
 - **D1.** Anthropic, behind a swappable provider layer.

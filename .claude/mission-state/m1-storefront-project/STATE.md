@@ -1,7 +1,7 @@
 # M1 — StoreEnvironment + StorefrontProject shell — STATE
 
 ## Status
-**ACCEPTED by independent review (round 2, at `6ac1f68`). Awaiting user decision to merge PR #2 and tag M1.** M2 not started.
+**ACCEPTED, MERGED AND TAGGED (2026-09-14).** Accepted by independent review (round 2, at `6ac1f68`), then merged into `main` as merge commit `e9e7d5e` via PR #2 and tagged `m1-accepted`. M2 has since been merged as `ea0a8f1` and tagged `m2-accepted`; M3 has not started.
 - Branch: `mission/m1-storefront-project`, created from `main` @ `000e72a` (the M0 merge, tagged `m0-accepted`). Pushed; draft PR #2 into `main`.
 - Model: `claude-opus-5`, high.
 
@@ -94,10 +94,10 @@ See `docs/STOREFRONT.md` §8:
 - review notes N-a, N-c and N-d.
 
 ## Remaining
-- Merge PR #2 and tag M1: user decision.
+- None. PR #2 was merged into `main` as `e9e7d5e` and tagged `m1-accepted`.
 
 ## Blocker
 None.
 
 ## Next intended action
-Await the user's merge/tag decision. Do not start M2.
+None: M1 is closed. M2 ran on `mission/m2-durable-generation` and is merged (`ea0a8f1`) and tagged `m2-accepted`. Do not start M3.

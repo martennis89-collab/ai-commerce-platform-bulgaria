@@ -1,6 +1,6 @@
 {
   "mission": "m1-storefront-project",
-  "status": "ACCEPTED_PENDING_MERGE",
+  "status": "ACCEPTED_MERGED_e9e7d5e_TAGGED_m1-accepted",
   "commands": {
     "packages": "npm run build:packages (platform/)",
     "typecheck": "npm run typecheck (platform/apps/backend)",
