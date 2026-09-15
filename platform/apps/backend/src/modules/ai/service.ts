@@ -4,6 +4,8 @@ import {
   AgentTask,
   AIAction,
   BusinessProfile,
+  DesignerMessage,
+  DesignerSession,
   Generation,
   MediaAsset,
   PromptQueueItem,
@@ -17,6 +19,8 @@ class AiModuleService extends MedusaService({
   Generation,
   BusinessProfile,
   MediaAsset,
+  DesignerSession,
+  DesignerMessage,
 }) {}
 
 export default AiModuleService

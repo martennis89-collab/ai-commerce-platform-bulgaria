@@ -4,17 +4,26 @@
  * Durable lane (M2): a deployment is executed only by the holder of an atomic
  * Postgres lease (fencing token). A crashed build's lease expires and any
  * worker re-claims it; a stale holder can never mark it ready or failed.
- * At most one deployment per project and target stays `ready`: the newest one
- * (by creation order), even when an older deployment finishes later.
+ *
+ * M3:
+ * - every deployment builds one storefront revision (the project head unless a
+ *   revision is named) and gets a monotonic per-project `sequence`;
+ * - at most one deployment per project and target stays `ready`: the newest by
+ *   sequence, even when an older deployment finishes later; for preview it also
+ *   decides the project's preview revision;
+ * - preview requests are rate limited per store environment.
  */
 import { randomUUID } from "crypto"
 import type { MedusaContainer } from "@medusajs/framework/types"
-import { MedusaError, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, MedusaError, Modules } from "@medusajs/framework/utils"
 import { STOREFRONT_MODULE } from "../modules/storefront"
 import type StorefrontModuleService from "../modules/storefront/service"
 import { sqlRows } from "../ai/sql"
 import { getDeployProvider } from "./deploy/provider"
 import { buildDeploymentManifest } from "./manifest"
+import { NEWEST_DEPLOYMENT_ORDER } from "./ordering"
+import { assertWithinRateLimit } from "./rate-limits"
+import { ensureHeadRevision, getOwnedRevision } from "./revisions"
 
 export const STOREFRONT_DEPLOYMENT_QUEUED = "storefront.deployment.queued"
 
@@ -26,7 +35,7 @@ const MAX_DEPLOYMENT_ATTEMPTS = 3
 export async function requestPreviewDeployment(
   container: MedusaContainer,
   storeEnvironmentId: string,
-  options: { requestKey?: string } = {}
+  options: { requestKey?: string; revisionId?: string; requestedBy?: string | null } = {}
 ) {
   const storefront: StorefrontModuleService = container.resolve(STOREFRONT_MODULE)
   const [project] = (await storefront.listStorefrontProjects({
@@ -45,6 +54,19 @@ export async function requestPreviewDeployment(
       return existing
     }
   }
+  const revision = options.revisionId
+    ? await getOwnedRevision(container, storeEnvironmentId, options.revisionId)
+    : await ensureHeadRevision(container, project.id, storeEnvironmentId)
+  if (revision.project_id !== project.id) {
+    throw new MedusaError(MedusaError.Types.NOT_FOUND, "storefront revision not found")
+  }
+  await assertWithinRateLimit(container, storeEnvironmentId, "preview_deploy")
+  const [{ deployment_sequence }] = await sqlRows(
+    container,
+    `UPDATE storefront_project SET deployment_sequence = deployment_sequence + 1, updated_at = now()
+      WHERE id = ? RETURNING deployment_sequence`,
+    [project.id]
+  )
   const deployment = await storefront.createDeployments({
     project_id: project.id,
     store_environment_id: project.store_environment_id,
@@ -54,6 +76,9 @@ export async function requestPreviewDeployment(
     core_version: project.core_version,
     hostname: project.preview_hostname,
     request_key: options.requestKey ?? null,
+    sequence: deployment_sequence,
+    revision_id: revision.id,
+    requested_by: options.requestedBy ?? null,
   } as any)
   await container.resolve(Modules.EVENT_BUS).emit({
     name: STOREFRONT_DEPLOYMENT_QUEUED,
@@ -96,8 +121,9 @@ export async function runLeasedDeployment(container: MedusaContainer, deployment
     const manifest = await buildDeploymentManifest(container, deployment.id)
     await sqlRows(
       container,
-      `UPDATE storefront_deployment SET manifest = ?::jsonb, updated_at = now() WHERE id = ? AND lease_token = ?`,
-      [JSON.stringify(manifest), deployment.id, token]
+      `UPDATE storefront_deployment SET manifest = ?::jsonb, revision_id = coalesce(revision_id, ?), updated_at = now()
+        WHERE id = ? AND lease_token = ?`,
+      [JSON.stringify(manifest), manifest.revision_id, deployment.id, token]
     )
     const provider = getDeployProvider(deployment.provider)
     const result = await provider.deploy(manifest)
@@ -157,17 +183,46 @@ export async function drainDeployments(container: MedusaContainer, options: { bu
   return executed
 }
 
-/** Keeps only the newest ready deployment of a project/target; every older ready one is superseded. */
-async function settleReadyDeployments(container: MedusaContainer, projectId: string, target: string) {
-  await sqlRows(
-    container,
-    `UPDATE storefront_deployment SET status = 'superseded', updated_at = now()
-      WHERE project_id = ? AND target = ? AND status = 'ready' AND deleted_at IS NULL
-        AND id <> (
-          SELECT id FROM storefront_deployment
-           WHERE project_id = ? AND target = ? AND status = 'ready' AND deleted_at IS NULL
-           ORDER BY id DESC LIMIT 1
-        )`,
-    [projectId, target, projectId, target]
-  )
+export { NEWEST_DEPLOYMENT_ORDER }
+
+/**
+ * Keeps only the newest ready deployment of a project/target; every older ready
+ * one is superseded. For preview, the newest ready deployment's revision becomes
+ * the project's preview revision. Serialised per project.
+ */
+export async function settleReadyDeployments(container: MedusaContainer, projectId: string, target: string) {
+  const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  await knex.transaction(async (trx: any) => {
+    const q = async (sql: string, b: unknown[]) => ((await trx.raw(sql, b))?.rows ?? []) as any[]
+    await q(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`storefront_settle:${projectId}`])
+    const [newest] = await q(
+      `SELECT id, revision_id FROM storefront_deployment
+        WHERE project_id = ? AND target = ? AND status = 'ready' AND deleted_at IS NULL
+        ORDER BY ${NEWEST_DEPLOYMENT_ORDER} LIMIT 1`,
+      [projectId, target]
+    )
+    if (!newest) {
+      return
+    }
+    await q(
+      `UPDATE storefront_deployment SET status = 'superseded', updated_at = now()
+        WHERE project_id = ? AND target = ? AND status = 'ready' AND deleted_at IS NULL AND id <> ?`,
+      [projectId, target, newest.id]
+    )
+    if (target === "preview" && newest.revision_id) {
+      await q(
+        `UPDATE storefront_revision SET state = 'superseded', updated_at = now()
+          WHERE project_id = ? AND state = 'preview' AND id <> ?`,
+        [projectId, newest.revision_id]
+      )
+      await q(`UPDATE storefront_revision SET state = 'preview', updated_at = now() WHERE id = ? AND project_id = ?`, [
+        newest.revision_id,
+        projectId,
+      ])
+      await q(`UPDATE storefront_project SET preview_revision_id = ?, updated_at = now() WHERE id = ?`, [
+        newest.revision_id,
+        projectId,
+      ])
+    }
+  })
 }

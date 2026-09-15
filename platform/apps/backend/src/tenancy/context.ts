@@ -228,6 +228,7 @@ export const MERCHANT_ROLE_PERMISSIONS = {
     "shoppers:read",
     "storefront:read",
     "storefront:deploy",
+    "storefront:design",
     "ai:generate",
     "ai:read",
     "media:write",
@@ -270,7 +271,11 @@ export function requirePermission(ctx: ExecutionContext, permission: Permission)
 export async function buildMerchantExecutionContext(
   container: MedusaContainer,
   authenticatedUserId: string | undefined,
-  hints: { current_page?: string | null } = {}
+  hints: {
+    current_page?: string | null
+    /** Only trusted server code may pass this (e.g. a selection the server already resolved). */
+    selected_entity?: { type: string; id: string } | null
+  } = {}
 ): Promise<ExecutionContext> {
   if (!authenticatedUserId) {
     throw new MedusaError(MedusaError.Types.UNAUTHORIZED, "Unauthorized")
@@ -291,7 +296,10 @@ export async function buildMerchantExecutionContext(
     store_environment: Object.freeze({ id: env.id, handle: env.handle, name: env.name }),
     permissions: Object.freeze([...permissions]),
     current_page: typeof hints.current_page === "string" ? hints.current_page.slice(0, 200) : null,
-    selected_entity: null,
+    selected_entity:
+      hints.selected_entity && typeof hints.selected_entity.id === "string" && typeof hints.selected_entity.type === "string"
+        ? Object.freeze({ type: hints.selected_entity.type.slice(0, 40), id: hints.selected_entity.id.slice(0, 80) })
+        : null,
     scope: new TenantScope(MINT, env.id, container),
   })
 }

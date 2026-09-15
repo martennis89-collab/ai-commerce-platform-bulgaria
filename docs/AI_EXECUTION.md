@@ -48,7 +48,7 @@ merchant ◀──GET /merchant/ai/runs/:id/events (SSE)── run/task status, 
     - `brand`, which also rebuilds `storefront` so the new theme reaches the preview;
     - `storefront` (home page copy);
     - `offers`.
-  - **Unsupported requests.** Product, description, price, stock and publishing requests route to `unsupported`. Such a prompt is rejected with `unsupported_request`, because product drafts are merchant-edited (M3).
+  - **Unsupported requests.** Product, description, price, stock and publishing requests route to `unsupported`. Such a prompt is rejected with `unsupported_request`, because product drafts are edited in the real catalogue milestone (M4).
   - **Supersession.** New tasks supersede the previous task of the same key.
 - **Cancel / pause / resume**:
   - Cancel marks queued tasks cancelled and stops running ones at the next checkpoint.
@@ -61,6 +61,47 @@ merchant ◀──GET /merchant/ai/runs/:id/events (SSE)── run/task status, 
 - `src/jobs/amboras-worker.ts`: Medusa scheduled job (every 2 s, no overlap) in `shared`/`worker` mode; disable with `AI_WORKER_AUTOSTART=false`.
 - `npm run ai:worker` (`medusa exec ./src/scripts/ai-worker.ts`): dedicated worker process. Any number of copies may run; leases make it safe.
 - Storefront preview deployments use the same lease/fencing pattern (`src/storefront/deployments.ts`). The `storefront.deployment.queued` subscriber is only a fast trigger into the same leased path; `drainDeployments` recovers crashed builds.
+
+## Designer turns (M3)
+
+The contextual designer reuses the same durable machinery. There is no parallel execution path.
+
+- **Sessions.**
+  - `ai_designer_session` is a persistent conversation per project.
+  - `ai_designer_message` holds merchant and assistant messages, strictly ordered per session.
+  - Merchant messages store the **server-resolved** selection (element id, section, field, label), never the raw browser report.
+- **One turn per message.** Sending a merchant message creates:
+  - a queued assistant message;
+  - one `designer_edit` AgentRun with a single `designer` task, limited to 2 model calls, 6 tool calls, 2 attempts and 5 minutes.
+- **One active turn per store.** A new message while a live turn is queued or running gets `409 turn_in_progress`, under a per-store advisory lock. A message whose run is terminal, cancel-requested or missing never blocks.
+- **Execution** (`src/ai/tasks.ts` → `designer`):
+  1. Re-read the head revision and re-resolve the selection against it (D6).
+  2. Call `designer.plan` (Sonnet tier), which returns a strict `DesignerPlanSchema`: a Bulgarian reply plus at most four typed operations.
+  3. Run each operation as the audited AI tool of the same name, with idempotency key `<run>:designer:op:<n>`.
+- **Context.** The worker builds the `ExecutionContext` with `current_page: "designer"` and `selected_entity: { type: "storefront_element", id }` taken from the stored server-resolved selection. The selection is recorded in every `ai_action.actor`.
+- **Designer tools** (`src/designer/operations.ts` + `src/ai/tools.ts`):
+  - Risk 0, permission `storefront:design`: `theme.update_tokens`, `section.update_copy`, `section.reorder`, `section.set_variant`, `section.add`, `section.remove`, `section.attach_photo`.
+  - Each applies a pure bounded transform to the current head, re-validates with storefront-schema v3, checks that new photos are owned media, applies the edit rate limit, and commits one revision based on that head (`action_key` = idempotency key, `designer_message_id` = the assistant message).
+  - `storefront.promote_preview` is risk 1, permission `storefront:deploy`.
+- **Settling.** The assistant message mirrors the turn outcome (`completed` / `failed` with an error code / `cancelled`). Its listed changes are read back from the revisions it created, so even a failed turn reports what it changed before it stopped.
+  - **When it settles.** `settleDesignerTurn` (`src/designer/turns.ts`) is idempotent and runs on every path that can end a turn:
+    - the worker's `finally`;
+    - restore/undo cancellation;
+    - `sweepExpired`, for every run it recomputes, including deadline expiry and a lease that expires on the final attempt;
+    - `settleStrandedDesignerTurns`, a repair sweep run by the worker tick and before every new message.
+  - **Terminal runs.** A run that is terminal while its task is not settles as `cancelled` or `failed`.
+  - **Cancel-requested runs.** Their queued, waiting, paused or lease-expired tasks are closed as `cancelled`.
+  - **Orphans.** A message whose run was never created or no longer exists is failed after two minutes.
+- **Undo and restore** (D8):
+  - Both are merchant commits of an earlier config.
+  - Both request cancellation of the store's designer turns inside their own commit, while holding the project row lock, so a rejected restore cancels nothing.
+    - Queued tasks are then closed.
+    - Running ones stop at their next checkpoint or at the commit guard.
+  - **Commit guard.** Every designer AI commit re-checks, under the same lock and immediately before inserting, that its run is not cancel-requested and that the task still holds its lease. A restore therefore always wins:
+    - an AI commit after it is refused (`TaskAbortedError("cancelled")`);
+    - AI revisions of the cancelled turn that landed before it are superseded instead of turning the restore into a 409.
+  - **Retries.** `revision_conflict` stays retryable, but the worker never retries a cancel-requested run, whatever the error.
+- **Error codes** add `revision_conflict` to the M2 set.
 
 ## Tool gate (`src/ai/tools.ts`)
 

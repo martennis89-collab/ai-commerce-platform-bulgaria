@@ -229,7 +229,10 @@ const createPreviewDeploymentRecordStep = createStep(
       provider: project.deployment_provider,
       core_version: project.core_version,
       hostname: project.preview_hostname,
+      // First deployment of a brand-new project: sequence 1 (M3 monotonic ordering).
+      sequence: 1,
     } as any)
+    await storefront.updateStorefrontProjects({ id: project.id, deployment_sequence: 1 } as any)
     return new StepResponse(deployment as any, (deployment as any).id)
   },
   async (deploymentId, { container }) => {

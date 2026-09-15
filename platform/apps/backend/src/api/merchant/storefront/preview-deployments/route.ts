@@ -3,6 +3,7 @@ import { z } from "@medusajs/framework/zod"
 import { MedusaError } from "@medusajs/framework/utils"
 import type { MerchantRequest } from "../../../../tenancy/merchant-guard"
 import { merchantStorefront } from "../../../../tenancy/merchant-storefront"
+import { respondRateLimited } from "../../../../storefront/rate-limits"
 
 /** No parameters: the project, environment and publishable key are all server-derived. */
 const RequestPreviewDeployment = z.strictObject({})
@@ -15,5 +16,11 @@ export const POST = async (req: MedusaRequest, res: MedusaResponse) => {
   if (!RequestPreviewDeployment.safeParse(req.body ?? {}).success) {
     throw new MedusaError(MedusaError.Types.INVALID_DATA, "Preview deployments take no parameters")
   }
-  res.status(202).json({ deployment: await merchantStorefront(ctx).requestPreviewDeployment() })
+  try {
+    res.status(202).json({ deployment: await merchantStorefront(ctx).requestPreviewDeployment() })
+  } catch (error) {
+    if (!respondRateLimited(res as any, error)) {
+      throw error
+    }
+  }
 }

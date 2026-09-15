@@ -14,16 +14,37 @@ import { z } from "zod"
 import { generateEntityId, MedusaError, Modules } from "@medusajs/framework/utils"
 import { createProductsWorkflow, updateProductsWorkflow } from "@medusajs/medusa/core-flows"
 import { STOREFRONT_CORE_VERSION } from "@platform/storefront-core"
-import { DEFAULT_THEME, parseStorefrontConfig, StorefrontConfigError } from "@platform/storefront-schema"
+import { DEFAULT_THEME, mediaIdsOf, nextSectionId, parseStorefrontConfig, StorefrontConfigError } from "@platform/storefront-schema"
 import { AI_MODULE } from "../modules/ai"
 import type AiModuleService from "../modules/ai/service"
 import { STOREFRONT_MODULE } from "../modules/storefront"
 import type StorefrontModuleService from "../modules/storefront/service"
 import { requestPreviewDeployment } from "../storefront/deployments"
+import { activeProjectFor, commitDraftRevision, ensureHeadRevision } from "../storefront/revisions"
+import { resolveOwnedMedia } from "../storefront/manifest"
+import { assertWithinRateLimit } from "../storefront/rate-limits"
+import {
+  AddSectionInput,
+  applyAddSection,
+  applyAttachPhoto,
+  applyCopy,
+  applyRemoveSection,
+  applyReorder,
+  applyThemeTokens,
+  applyVariant,
+  AttachPhotoInput,
+  DesignerOperationError,
+  OperationResult,
+  RemoveSectionInput,
+  ReorderInput,
+  SetVariantInput,
+  ThemeTokensInput,
+  UpdateCopyInput,
+} from "../designer/operations"
 import { ExecutionContext, Permission, requirePermission } from "../tenancy/context"
 import { findTenantSelectors, isForbiddenTenantKey } from "../tenancy/selectors"
 import { AiLimits, aiLimits } from "./config"
-import { LeaseLostError, LimitReachedError, ToolRejectedError } from "./errors"
+import { LeaseLostError, LimitReachedError, TaskAbortedError, ToolRejectedError } from "./errors"
 import { BrandProposalSchema, HomeCopySchema, OfferSuggestionSchema, priceStatedByMerchant } from "./schemas"
 import { sqlRows } from "./sql"
 
@@ -37,6 +58,8 @@ export type ToolRuntime = {
   merchantText: string
   /** Limits captured on the run at start; falls back to current server configuration. */
   limits?: AiLimits
+  /** Assistant message of the designer turn making this call (M3), recorded on revisions. */
+  designerMessageId?: string | null
 }
 
 export type AiTool<S extends z.ZodTypeAny = z.ZodTypeAny> = {
@@ -111,7 +134,9 @@ const brandApply = defineAiTool({
   input: BrandProposalSchema,
   handler: async (rt, input, key) => {
     const project = await activeProject(rt)
-    const current = parseStorefrontConfig(project.config)
+    const env = rt.ctx.scope.storeEnvironmentId
+    const head = await ensureHeadRevision(rt.ctx.scope.container, project.id, env)
+    const current = parseStorefrontConfig(head.config)
     let themeSource: "model" | "platform_default" = "model"
     let config
     try {
@@ -127,13 +152,17 @@ const brandApply = defineAiTool({
         theme: { ...DEFAULT_THEME, typography: input.typography, corner: input.corner },
       })
     }
-    await storefrontService(rt).updateStorefrontProjects({
-      id: project.id,
+    await commitDraftRevision(rt.ctx.scope.container, {
+      projectId: project.id,
+      storeEnvironmentId: env,
+      parentRevisionId: head.id,
       config,
-      core_version: STOREFRONT_CORE_VERSION,
-    } as any)
+      author: { type: "ai", user_id: rt.actor.user_id },
+      summary: "Нова визуална идентичност",
+      actionKey: key,
+    })
+    await storefrontService(rt).updateStorefrontProjects({ id: project.id, core_version: STOREFRONT_CORE_VERSION } as any)
     const service = ai(rt)
-    const env = rt.ctx.scope.storeEnvironmentId
     const [profile] = (await service.listBusinessProfiles({ store_environment_id: env })) as any[]
     const brand = { tagline: input.tagline, tone: input.tone, theme_source: themeSource }
     if (profile) {
@@ -316,24 +345,40 @@ const storefrontUpdateHome = defineAiTool({
   input: HomeCopySchema,
   handler: async (rt, input, key) => {
     const project = await activeProject(rt)
-    const current = parseStorefrontConfig(project.config)
-    const config = parseStorefrontConfig({
-      ...current,
-      home: {
-        hero: {
-          headline: input.hero_headline,
-          subheadline: input.hero_subheadline,
-          cta_label: current.home.hero.cta_label,
-        },
-        product_grid: current.home.product_grid,
-        about: { title: input.about_title, body: input.about_body },
-      },
+    const env = rt.ctx.scope.storeEnvironmentId
+    const head = await ensureHeadRevision(rt.ctx.scope.container, project.id, env)
+    const current = parseStorefrontConfig(head.config)
+    const sections: any[] = current.home.sections.map((s) => {
+      if (s.type === "hero") {
+        return { ...s, headline: input.hero_headline, subheadline: input.hero_subheadline }
+      }
+      if (s.type === "about") {
+        return { ...s, title: input.about_title, body: input.about_body }
+      }
+      return s
     })
-    await storefrontService(rt).updateStorefrontProjects({
-      id: project.id,
+    if (!sections.some((s) => s.type === "about")) {
+      const gridIndex = sections.findIndex((s) => s.type === "product_grid")
+      sections.splice(gridIndex + 1, 0, {
+        id: nextSectionId(current, "about"),
+        type: "about",
+        variant: "text",
+        title: input.about_title,
+        body: input.about_body,
+        image: null,
+      })
+    }
+    const config = parseStorefrontConfig({ ...current, home: { sections } })
+    await commitDraftRevision(rt.ctx.scope.container, {
+      projectId: project.id,
+      storeEnvironmentId: env,
+      parentRevisionId: head.id,
       config,
-      core_version: STOREFRONT_CORE_VERSION,
-    } as any)
+      author: { type: "ai", user_id: rt.actor.user_id },
+      summary: "Текстове на началната страница",
+      actionKey: key,
+    })
+    await storefrontService(rt).updateStorefrontProjects({ id: project.id, core_version: STOREFRONT_CORE_VERSION } as any)
     let generation = await findGeneration(rt, "storefront_config", key)
     generation ??= await ai(rt).createGenerations({
       store_environment_id: rt.ctx.scope.storeEnvironmentId,
@@ -385,7 +430,125 @@ const offersPropose = defineAiTool({
   },
 })
 
+// ---------------------------------------------------------------------------
+// Designer tools (M3): risk 0 presentation edits, risk 1 preview promotion
+// ---------------------------------------------------------------------------
+
+/**
+ * Applies one designer operation to the current head and commits it as a new
+ * revision based on that head. Replays return the revision the action key
+ * already created; photos must be owned media; edits are rate limited.
+ */
+async function commitDesignerEdit(
+  rt: ToolRuntime,
+  key: string,
+  operate: (config: ReturnType<typeof parseStorefrontConfig>) => OperationResult
+) {
+  const container = rt.ctx.scope.container
+  const env = rt.ctx.scope.storeEnvironmentId
+  const [replayed] = await sqlRows(
+    container,
+    `SELECT id, sequence, summary FROM storefront_revision WHERE action_key = ? AND store_environment_id = ? AND deleted_at IS NULL`,
+    [key, env]
+  )
+  if (replayed) {
+    return { revision_id: replayed.id, sequence: replayed.sequence, summary: replayed.summary }
+  }
+  const project = await activeProjectFor(container, env)
+  const head = await ensureHeadRevision(container, project.id, env)
+  const current = parseStorefrontConfig(head.config)
+  let result: OperationResult
+  try {
+    result = operate(current)
+  } catch (error) {
+    if (error instanceof DesignerOperationError) {
+      throw new ToolRejectedError("invalid_input", error.message)
+    }
+    throw error
+  }
+  const config = parseStorefrontConfig(result.config)
+  const before = new Set(mediaIdsOf(current))
+  const added = mediaIdsOf(config).filter((id) => !before.has(id))
+  try {
+    await resolveOwnedMedia(container, env, added)
+  } catch {
+    throw new ToolRejectedError("policy", "photos must be the store's own uploaded media")
+  }
+  await assertWithinRateLimit(container, env, "designer_edit")
+  const revision = await commitDraftRevision(container, {
+    projectId: project.id,
+    storeEnvironmentId: env,
+    parentRevisionId: head.id,
+    config,
+    author: { type: "ai", user_id: rt.actor.user_id },
+    summary: result.summary,
+    actionKey: key,
+    designerMessageId: rt.designerMessageId ?? null,
+    // Under the project row lock that restore/undo also take: a turn cancelled by a restore (which requests
+    // cancellation inside its own locked commit) or a worker that lost its lease never commits an edit.
+    guard: async (trx) => {
+      const [task] = ((
+        await trx.raw(
+          `SELECT t.lease_token, t.status, r.cancel_requested_at FROM ai_task t JOIN ai_run r ON r.id = t.run_id
+            WHERE t.id = ? AND r.id = ? AND t.store_environment_id = ?`,
+          [rt.taskId, rt.runId, env]
+        )
+      )?.rows ?? []) as any[]
+      if (!task || task.lease_token !== rt.leaseToken || task.status !== "running") {
+        throw new LeaseLostError()
+      }
+      if (task.cancel_requested_at) {
+        throw new TaskAbortedError("cancelled")
+      }
+    },
+  })
+  return { revision_id: revision.id, sequence: revision.sequence, summary: revision.summary }
+}
+
+const designerTool = <S extends z.ZodObject<any>>(
+  name: string,
+  input: S,
+  operate: (config: ReturnType<typeof parseStorefrontConfig>, args: z.output<S>) => OperationResult
+) =>
+  defineAiTool({
+    name,
+    risk: 0,
+    permission: "storefront:design",
+    input,
+    handler: (rt, args, key) => commitDesignerEdit(rt, key, (config) => operate(config, args)),
+  })
+
+const themeUpdateTokens = designerTool("theme.update_tokens", ThemeTokensInput, applyThemeTokens)
+const sectionUpdateCopy = designerTool("section.update_copy", UpdateCopyInput, applyCopy)
+const sectionReorder = designerTool("section.reorder", ReorderInput, applyReorder)
+const sectionSetVariant = designerTool("section.set_variant", SetVariantInput, applyVariant)
+const sectionAdd = designerTool("section.add", AddSectionInput, applyAddSection)
+const sectionRemove = designerTool("section.remove", RemoveSectionInput, applyRemoveSection)
+const sectionAttachPhoto = designerTool("section.attach_photo", AttachPhotoInput, applyAttachPhoto)
+
+const storefrontPromotePreview = defineAiTool({
+  name: "storefront.promote_preview",
+  risk: 1,
+  permission: "storefront:deploy",
+  input: z.strictObject({}),
+  handler: async (rt, _input, key) => {
+    const deployment = await requestPreviewDeployment(rt.ctx.scope.container, rt.ctx.scope.storeEnvironmentId, {
+      requestKey: key,
+      requestedBy: rt.actor.user_id,
+    })
+    return { deployment_id: deployment.id, sequence: deployment.sequence, revision_id: deployment.revision_id, status: deployment.status }
+  },
+})
+
 export const AI_TOOLS = {
+  [themeUpdateTokens.name]: themeUpdateTokens,
+  [sectionUpdateCopy.name]: sectionUpdateCopy,
+  [sectionReorder.name]: sectionReorder,
+  [sectionSetVariant.name]: sectionSetVariant,
+  [sectionAdd.name]: sectionAdd,
+  [sectionRemove.name]: sectionRemove,
+  [sectionAttachPhoto.name]: sectionAttachPhoto,
+  [storefrontPromotePreview.name]: storefrontPromotePreview,
   [businessProfileUpsert.name]: businessProfileUpsert,
   [brandApply.name]: brandApply,
   [createProductDraft.name]: createProductDraft,
@@ -487,7 +650,8 @@ export async function executeAiTool(
         key,
         JSON.stringify(input),
         sha256(canonical(input)),
-        JSON.stringify({ ...rt.actor, run_id: rt.runId, task_id: rt.taskId }),
+        // selected_entity is the server-built ExecutionContext selection (M3), recorded for audit.
+        JSON.stringify({ ...rt.actor, run_id: rt.runId, task_id: rt.taskId, selected_entity: rt.ctx.selected_entity ?? null }),
       ]
     )
     if (!inserted.length) {

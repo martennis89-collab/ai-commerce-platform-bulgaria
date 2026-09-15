@@ -6,7 +6,7 @@
  */
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import { parseStorefrontConfig } from "@platform/storefront-schema"
+import { findSection, parseStorefrontConfig } from "@platform/storefront-schema"
 import { bearer, createUserWithToken } from "../fixtures/http"
 import { AI_MODULE } from "../../src/modules/ai"
 import { STOREFRONT_MODULE } from "../../src/modules/storefront"
@@ -81,8 +81,8 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
         const [project] = await (container.resolve(STOREFRONT_MODULE) as any).listStorefrontProjects({ id: projectId })
         const config = parseStorefrontConfig(project.config)
-        expect(config.schema_version).toBe(2)
-        expect(config.home.about.body).toMatch(/[а-яА-Я]/)
+        expect(config.schema_version).toBe(3)
+        expect(findSection(config, "about")!.body).toMatch(/[а-яА-Я]/)
         // eslint-disable-next-line no-console
         console.log("M2-T15 live output", JSON.stringify({ usage: run.usage, home: config.home, theme: config.theme, drafts: drafts.map((d) => d.payload) }, null, 2))
       })

@@ -6,6 +6,7 @@
     "packages/storefront-schema",
     "packages/storefront-core",
     "apps/storefront",
+    "apps/admin",
     "apps/backend"
   ],
   "scripts": {

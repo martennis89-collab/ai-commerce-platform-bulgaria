@@ -5,6 +5,7 @@ import {
   merchantExecutionContextMiddleware,
 } from "../tenancy/merchant-guard"
 import { storefrontTenantGuard, tenantProductListFilter } from "../tenancy/storefront-policy"
+import { merchantCors } from "./merchant-cors"
 
 /**
  * Global (method-less) middlewares are sorted by Medusa ahead of every
@@ -18,7 +19,7 @@ export default defineMiddlewares({
     { matcher: "/auth*", middlewares: [denyCustomerAccounts] },
     {
       matcher: "/merchant*",
-      middlewares: [authenticate("user", ["bearer"]), merchantExecutionContextMiddleware],
+      middlewares: [merchantCors, authenticate("user", ["bearer"]), merchantExecutionContextMiddleware],
     },
     // Merchant photo uploads are base64 JSON; allow the configured size plus encoding overhead.
     { matcher: "/merchant/media", methods: ["POST"], bodyParser: { sizeLimit: "8mb" }, middlewares: [] },

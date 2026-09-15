@@ -2,11 +2,12 @@
 
 This file records repository-level architecture clarifications. It does not restate or override the LOCKED documents. `SCOPE_LEVEL_3_LOCKED.md` is normative.
 
-## Current repository reality (after M2)
+## Current repository reality (M3 in progress)
 
 ```text
 platform/                      npm workspaces, install-strategy=nested (ADR-019)
-  apps/backend                 Medusa 2.21 + tenancy module (M0) + storefront module (M1) + ai module and durable worker (M2)
+  apps/admin                   Amboras merchant admin: contextual storefront designer (M3, ADR-021)
+  apps/backend                 Medusa 2.21 + tenancy module (M0) + storefront module (M1) + ai module and durable worker (M2) + designer (M3)
   apps/storefront              storefront-core harness: exactly one manifest; not a runtime
   packages/storefront-schema   strict storefront configuration schema
   packages/storefront-core     versioned core: manifest contract, build materialisation, Next.js template
@@ -47,3 +48,13 @@ See `docs/AI_EXECUTION.md` and ADR-020. M2 realises Level 3 §1.2, §5 and §6 f
   - Product drafts are Medusa draft products claimed by the environment, with provenance.
   - Storefront changes are storefront-schema v2 config rendered by storefront-core 0.2.0 into preview deployments.
   - Offers are suggestions only.
+
+## M3 clarifications (contextual designer)
+
+See `docs/STOREFRONT.md` §3 and §8, `docs/AI_EXECUTION.md` (designer turns), `DESIGN.md`, ADR-021 and ADR-022. M3 realises Level 3 §4 and the designer part of §1.3:
+
+- **Versioning.** Storefront configuration is versioned by append-only `StorefrontRevision` rows with draft/preview/published/superseded states. Every change is a revision with an author and a parent check. Undo and restore append, never rewrite.
+- **Selection context.** Stable element ids come from schema paths. A `postMessage` bridge carries the selected element from the admin's draft frame. The server re-resolves every selection before it reaches `ExecutionContext.selected_entity`.
+- **Admin and draft rendering.** The first merchant UI is `apps/admin`, a Next.js App Router app with the bearer token in memory. It renders the merchant's own draft with the same `StorefrontPage` renderer the builds use. That is authenticated admin tooling for one merchant, not a storefront runtime. Real previews are still independent per-project builds.
+- **Designer turns.** Each merchant message is a bounded `designer_edit` AgentRun through the M2 lease, fencing and tool gate. The model returns a validated plan; typed risk-0 tools apply it; promotion is risk 1. Nothing is published live.
+- **Screenshots.** Headless Chromium (Playwright) renders one ready preview artifact from disk, with no network access beyond the store's own media, and stores the PNG as owned media.

@@ -1,6 +1,7 @@
 /dist
 .env
 /uploads
+/static
 /node_modules
 coverage
 build

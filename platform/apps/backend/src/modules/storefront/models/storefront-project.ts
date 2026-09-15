@@ -1,5 +1,6 @@
 import { model } from "@medusajs/framework/utils"
 import Deployment from "./deployment"
+import StorefrontRevision from "./storefront-revision"
 
 /**
  * One merchant StoreEnvironment's independent storefront project (Level 3 §3–§4).
@@ -19,11 +20,23 @@ const StorefrontProject = model.define("storefront_project", {
   publishable_api_key_id: model.text(),
   preview_hostname: model.text().unique(),
   live_hostname: model.text().unique(),
-  /** Draft storefront configuration (validated by @platform/storefront-schema). */
+  /**
+   * Mirror of the current head revision's config (validated by @platform/storefront-schema).
+   * Revisions are the source of truth (M3); this copy is kept for existing readers.
+   */
   config: model.json(),
   active_theme: model.text().default("default"),
   status: model.enum(["active", "archived"]).default("active"),
+  /** The current draft head revision (M3). Created lazily for pre-M3 projects. */
+  head_revision_id: model.text().nullable(),
+  /** The revision served by the newest ready preview deployment. */
+  preview_revision_id: model.text().nullable(),
+  /** Last allocated revision sequence (monotonic). */
+  revision_sequence: model.number().default(0),
+  /** Last allocated deployment sequence (monotonic, M3-D11). */
+  deployment_sequence: model.number().default(0),
   deployments: model.hasMany(() => Deployment, { mappedBy: "project" }),
+  revisions: model.hasMany(() => StorefrontRevision, { mappedBy: "project" }),
 })
 
 export default StorefrontProject

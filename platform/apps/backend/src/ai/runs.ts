@@ -66,7 +66,7 @@ export function errorCodeOf(error: string | null | undefined): MerchantErrorCode
     return null
   }
   const code = error.split(":")[0]
-  return (["model_unavailable", "model_output_rejected", "policy_rejected", "limit_reached", "unsupported_request", "internal"] as const).includes(
+  return (["model_unavailable", "model_output_rejected", "policy_rejected", "limit_reached", "unsupported_request", "revision_conflict", "internal"] as const).includes(
     code as MerchantErrorCode
   )
     ? (code as MerchantErrorCode)
@@ -80,6 +80,8 @@ async function loadOwnedRun(ctx: ExecutionContext, runId: string) {
   const [run] = (await service(ctx.scope.container).listAgentRuns({
     id: runId,
     store_environment_id: ctx.scope.storeEnvironmentId,
+    // Designer turns (M3) are internal runs; the merchant sees them through designer messages.
+    kind: "initial_generation",
   })) as any[]
   if (!run) {
     throw notFound()
@@ -122,7 +124,7 @@ export async function startInitialGeneration(ctx: ExecutionContext, rawBody: unk
     `SELECT
        count(*) FILTER (WHERE status IN (${ACTIVE_RUN_STATUSES.map(() => "?").join(", ")})) AS active,
        count(*) FILTER (WHERE created_at > now() - interval '1 day') AS today
-     FROM ai_run WHERE store_environment_id = ? AND deleted_at IS NULL`,
+     FROM ai_run WHERE store_environment_id = ? AND kind = 'initial_generation' AND deleted_at IS NULL`,
     [...ACTIVE_RUN_STATUSES, env]
   )
   if (Number(counts.active) >= limits.maxActiveRunsPerStore) {
@@ -209,7 +211,7 @@ export async function getRunSummary(ctx: ExecutionContext, runId: string) {
 export async function listRunSummaries(ctx: ExecutionContext) {
   requirePermission(ctx, "ai:read")
   const runs = (await service(ctx.scope.container).listAgentRuns(
-    { store_environment_id: ctx.scope.storeEnvironmentId },
+    { store_environment_id: ctx.scope.storeEnvironmentId, kind: "initial_generation" },
     { take: 20, order: { created_at: "DESC" } }
   )) as any[]
   return runs.map((r) => ({ id: r.id, status: r.status, progress: r.progress, created_at: r.created_at }))
@@ -244,7 +246,7 @@ async function assertNoOtherActiveRun(container: MedusaContainer, storeEnvironme
   const [{ n }] = await sqlRows(
     container,
     `SELECT count(*)::int AS n FROM ai_run
-      WHERE store_environment_id = ? AND id <> ? AND deleted_at IS NULL
+      WHERE store_environment_id = ? AND id <> ? AND kind = 'initial_generation' AND deleted_at IS NULL
         AND status IN ('queued', 'running', 'waiting', 'paused')`,
     [storeEnvironmentId, run.id]
   )

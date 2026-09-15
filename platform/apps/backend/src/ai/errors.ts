@@ -58,4 +58,5 @@ export type MerchantErrorCode =
   | "policy_rejected"
   | "limit_reached"
   | "unsupported_request"
+  | "revision_conflict"
   | "internal"

@@ -168,6 +168,19 @@ There are two independent layers.
   - Every `ai_run`, `ai_task`, `ai_prompt_queue`, `ai_action`, `ai_generation`, `ai_business_profile` and `ai_media_asset` row carries the environment. Replaying another environment's run, task or event-stream id through the merchant API returns 404.
   - AI tool inputs cannot declare tenant keys, and raw arguments are scanned for selectors. Workers rebuild the merchant `ExecutionContext` server-side and refuse any mismatch with the run's environment, including suspended environments.
   - AI product drafts are claimed, draft-only and invisible to the Store API.
-  - M3 editing must keep these tests and add preview-to-live publishing checks.
+  - Later milestones must keep these tests. Live publishing must add preview-to-live checks.
+- **M3 contextual designer** (`docs/STOREFRONT.md` §3, §8; tests in `m3-designer.spec.ts`, `m3-designer-e2e.spec.ts`, `designer-contracts.unit.spec.ts`):
+  - **Environment-owned rows.** Every `storefront_revision`, `storefront_screenshot`, `ai_designer_session` and `ai_designer_message` row carries the environment. Another environment's session, revision or deployment id through the designer API or its event stream returns 404 (M3-T10).
+  - **Server-owned selection.**
+    - Browser-reported element ids are hints only. The server re-resolves them against the caller's own head before they reach a message or the `ExecutionContext` (M3-T01, M3-T02).
+    - The preview bridge accepts only exact origins and windows (M3-T13).
+    - The admin draft frame can be framed only by the admin itself. Preview artifacts can never be framed.
+  - **Committed changes.** Designer changes are typed, audited, idempotent tool calls. Revisions are append-only, with optimistic parent checks, so a stale writer or a cancelled turn cannot overwrite newer work (M3-T04 to T06).
+  - **Media in designs and builds.**
+    - Only owned media ids can be placed in a design.
+    - Manifests resolve media URLs server-side and fail the build on media another environment owns (M3-T12).
+    - Screenshots render only the store's own artifact. Their network access is limited to that store's own media, and they are stored as owned media (M3-T08).
+  - **Preview only.** M3 promotes to preview. No live deployment exists, and live hostnames do not resolve (M3-T09).
+  - **Rate limits.** Edits, designer turns, preview deployments and screenshots are limited per environment (M3-T14).
 - **Payments, shipping, email (M7, M8):** provider accounts, webhooks and idempotency keys resolve the environment from the owned order or cart, never from the webhook payload's claimed merchant.
 - **Analytics (M6):** events are written with the server-resolved environment. Test that a client-sent environment in the event payload is rejected.

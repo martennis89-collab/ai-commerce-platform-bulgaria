@@ -124,8 +124,16 @@ describe("M2 AI contracts", () => {
         "catalogue.create_product_draft",
         "media.attach_product_image",
         "offers.propose",
+        "section.add",
+        "section.attach_photo",
+        "section.remove",
+        "section.reorder",
+        "section.set_variant",
+        "section.update_copy",
+        "storefront.promote_preview",
         "storefront.request_preview_deployment",
         "storefront.update_home",
+        "theme.update_tokens",
       ])
       for (const tool of Object.values(AI_TOOLS)) {
         const keys = Object.keys((tool.input as any).shape)

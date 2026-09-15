@@ -1,0 +1,21 @@
+{
+  "name": "@platform/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Amboras merchant admin (M3: contextual storefront designer). Next.js App Router; bearer token in memory (ADR-021).",
+  "scripts": {
+    "dev": "next dev -p 7001",
+    "build": "next build",
+    "start": "next start -p 7001"
+  },
+  "dependencies": {
+    "@platform/storefront-core": "*",
+    "@platform/storefront-schema": "*",
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

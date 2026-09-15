@@ -5,9 +5,13 @@
  * retry replays completed calls instead of duplicating anything.
  */
 import type { TaskKey } from "../modules/ai/models"
+import { parseStorefrontConfig, resolveElement } from "@platform/storefront-schema"
+import { activeProjectFor, ensureHeadRevision } from "../storefront/revisions"
+import { sqlRows } from "./sql"
 import { dataPrompt, systemPrompt } from "./prompts"
 import {
   BrandProposalSchema,
+  DesignerPlanSchema,
   DraftCopySchema,
   FactsExtractionSchema,
   HomeCopySchema,
@@ -164,12 +168,88 @@ const offers: TaskImplementation = async (rt) => {
   return { suggestions: suggestion.offers.length }
 }
 
+/**
+ * One designer turn (M3). The selection stored on the merchant message was
+ * resolved by the server when the message was sent; it is re-resolved here
+ * against the current head, because the draft may have changed since (D6).
+ * The model only returns a validated plan; every change is an audited tool call.
+ */
+const designer: TaskImplementation = async (rt) => {
+  const container = rt.ctx.scope.container
+  const env = rt.ctx.scope.storeEnvironmentId
+  const turn = rt.run.input as {
+    session_id: string
+    merchant_message_id: string
+    assistant_message_id: string
+    content: string
+    selected_element_id: string | null
+  }
+  await sqlRows(
+    container,
+    `UPDATE ai_designer_message SET status = 'running', updated_at = now()
+      WHERE id = ? AND store_environment_id = ? AND status = 'queued'`,
+    [turn.assistant_message_id, env]
+  )
+  await rt.step("Разглеждам черновата", 10)
+  const project = await activeProjectFor(container, env)
+  const head = await ensureHeadRevision(container, project.id, env)
+  const config = parseStorefrontConfig(head.config)
+  const selected = turn.selected_element_id ? resolveElement(config, turn.selected_element_id) : null
+  const media = await sqlRows(
+    container,
+    `SELECT id AS media_id, original_name AS name FROM ai_media_asset
+      WHERE store_environment_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 30`,
+    [env]
+  )
+  await rt.step("Работя по промяната", 30)
+  // A retried turn reuses the plan of its first attempt: tool calls replay by operation index,
+  // so a fresh plan could otherwise silently skip a different operation at the same index.
+  const [stored] = await sqlRows(
+    container,
+    `SELECT result FROM ai_designer_message WHERE id = ? AND store_environment_id = ?`,
+    [turn.assistant_message_id, env]
+  )
+  const storedPlan = DesignerPlanSchema.safeParse(stored?.result?.plan)
+  const plan = storedPlan.success
+    ? storedPlan.data
+    : await rt.model({
+        purpose: "generation",
+        operation: "designer.plan",
+        schema: DesignerPlanSchema,
+        input: {
+          message: turn.content,
+          selected_element: selected,
+          selection_no_longer_exists: Boolean(turn.selected_element_id && !selected),
+          store_name: config.store.name,
+          theme: config.theme,
+          sections: config.home.sections,
+          media,
+        },
+        task: "Plan the storefront change the merchant asked for.",
+      })
+  if (!storedPlan.success) {
+    await sqlRows(
+      container,
+      `UPDATE ai_designer_message SET result = jsonb_build_object('plan', ?::jsonb), updated_at = now()
+        WHERE id = ? AND store_environment_id = ?`,
+      [JSON.stringify(plan), turn.assistant_message_id, env]
+    )
+  }
+  const changes: Record<string, unknown>[] = []
+  for (const [i, operation] of plan.operations.entries()) {
+    await rt.step(`Прилагам промяна ${i + 1} от ${plan.operations.length}`, 40 + Math.round((50 * i) / plan.operations.length))
+    changes.push({ tool: operation.op, ...(await rt.tool(operation.op, operation.args, `op:${i}`)) })
+  }
+  return { reply: plan.reply, changes }
+}
+
 export const TASK_IMPLEMENTATIONS: Record<TaskKey, TaskImplementation> = {
   brand,
   catalogue,
   images,
   storefront,
   offers,
+  designer,
 }
 
 export { systemPrompt, dataPrompt }

@@ -5,6 +5,15 @@
  * or arbitrary ids; product prices never come from generation output.
  */
 import { z } from "zod"
+import {
+  AddSectionInput,
+  AttachPhotoInput,
+  RemoveSectionInput,
+  ReorderInput,
+  SetVariantInput,
+  ThemeTokensInput,
+  UpdateCopyInput,
+} from "../designer/operations"
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/)
 
@@ -76,7 +85,7 @@ export type Offers = z.infer<typeof OffersSchema>
 
 /**
  * Follow-ups may change the brand, the home page copy and offer suggestions.
- * Product drafts are merchant-edited (M3); such requests route to `unsupported`.
+ * Product drafts are edited in the real catalogue milestone (M4); such requests route to `unsupported`.
  */
 export const FOLLOW_UP_TARGETS = ["brand", "storefront", "offers", "unsupported"] as const
 
@@ -85,6 +94,28 @@ export const FollowUpRouteSchema = z.strictObject({
   instruction: z.string().min(1).max(500),
 })
 export type FollowUpRoute = z.infer<typeof FollowUpRouteSchema>
+
+/**
+ * One designer turn (M3): a short Bulgarian reply plus at most four typed
+ * operations. Operation names are the AI tool names; every operation is still
+ * validated, audited and executed server-side by its tool.
+ */
+export const DesignerOperationSchema = z.discriminatedUnion("op", [
+  z.strictObject({ op: z.literal("theme.update_tokens"), args: ThemeTokensInput }),
+  z.strictObject({ op: z.literal("section.update_copy"), args: UpdateCopyInput }),
+  z.strictObject({ op: z.literal("section.reorder"), args: ReorderInput }),
+  z.strictObject({ op: z.literal("section.set_variant"), args: SetVariantInput }),
+  z.strictObject({ op: z.literal("section.add"), args: AddSectionInput }),
+  z.strictObject({ op: z.literal("section.remove"), args: RemoveSectionInput }),
+  z.strictObject({ op: z.literal("section.attach_photo"), args: AttachPhotoInput }),
+  z.strictObject({ op: z.literal("storefront.promote_preview"), args: z.strictObject({}) }),
+])
+
+export const DesignerPlanSchema = z.strictObject({
+  reply: z.string().min(1).max(600),
+  operations: z.array(DesignerOperationSchema).max(4),
+})
+export type DesignerPlan = z.infer<typeof DesignerPlanSchema>
 
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
