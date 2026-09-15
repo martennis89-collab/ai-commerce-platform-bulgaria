@@ -148,6 +148,10 @@ The independent red-team review of PR #4 at `d70fea8` returned **REJECT**. Remed
 - **`designer-contracts.unit.spec.ts`:** the exact 429 body now includes `reason`, and a `busy` case was added.
 - **`m3-designer-e2e.spec.ts`:** the new M3-T15 keyboard, theme ring and states test.
 
+### Commits
+- **Remediation commit:** `05b3788`, pushed to `mission/m3-contextual-designer`. It holds the code, tests, docs and this state.
+- **State record:** a follow-up docs-only commit records this SHA. PR #4 remains a draft.
+
 ### Verification (remediation)
 
 | Check | Result |
