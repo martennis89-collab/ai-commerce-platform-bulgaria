@@ -6,27 +6,158 @@
  * Schemas are strict — unknown keys are rejected — so configuration can never
  * carry tenant selection, credentials or other out-of-band data. Tenant identity
  * and the publishable key are supplied by the server-built deployment manifest.
+ *
+ * v2 (M2) adds a small, contrast-validated theme token set and a fixed home page
+ * (hero, product grid, about). A generated theme can therefore never produce an
+ * unreadable storefront. v1 configurations are upgraded on parse.
  */
 import { z } from "zod"
 
 /** Re-exported so dependants validate with the same zod instance. */
 export { z }
 
-export const STOREFRONT_SCHEMA_VERSION = 1 as const
+export const STOREFRONT_SCHEMA_VERSION = 2 as const
 
-export const StorefrontConfigSchema = z.strictObject({
-  schema_version: z.literal(STOREFRONT_SCHEMA_VERSION),
-  store: z.strictObject({
-    name: z.string().trim().min(1).max(80),
-    locale: z.literal("bg-BG"),
-    currency_code: z.literal("eur"),
-  }),
-  theme: z.strictObject({
+const hex = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/, "must be a #rrggbb colour")
+  .transform((v) => v.toLowerCase())
+
+/** Single-line text: trimmed, no control characters. */
+const line = (min: number, max: number) =>
+  z
+    .string()
+    .transform((v) => v.trim())
+    .pipe(
+      z
+        .string()
+        .min(min)
+        .max(max)
+        .regex(/^[^\u0000-\u001f\u007f]*$/, "must be a single line")
+    )
+
+/** Multi-line text: trimmed, newlines allowed, no other control characters. */
+const paragraph = (max: number) =>
+  z
+    .string()
+    .transform((v) => v.trim())
+    .pipe(z.string().max(max).regex(/^[^\u0000-\u0009\u000b-\u001f\u007f]*$/, "contains control characters"))
+
+const StoreSchema = z.strictObject({
+  name: line(1, 80),
+  locale: z.literal("bg-BG"),
+  currency_code: z.literal("eur"),
+})
+
+function luminance(hexColour: string): number {
+  const channel = (i: number) => {
+    const c = parseInt(hexColour.slice(i, i + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+}
+
+/** WCAG 2.x contrast ratio between two #rrggbb colours. */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/** Minimum contrast pairs every theme must satisfy. */
+export const THEME_CONTRAST_RULES: { fg: ThemeColour; bg: ThemeColour; min: number }[] = [
+  { fg: "ink", bg: "paper", min: 7 },
+  { fg: "muted", bg: "paper", min: 4.5 },
+  { fg: "accent_ink", bg: "accent", min: 4.5 },
+  { fg: "accent", bg: "paper", min: 3 },
+]
+
+type ThemeColour = "paper" | "ink" | "muted" | "accent" | "accent_ink" | "line"
+
+const ThemeSchema = z
+  .strictObject({
     preset: z.enum(["default"]),
+    typography: z.enum(["editorial", "modern"]),
+    corner: z.enum(["soft", "square"]),
+    colors: z.strictObject({
+      paper: hex,
+      ink: hex,
+      muted: hex,
+      accent: hex,
+      accent_ink: hex,
+      line: hex,
+    }),
+  })
+  .superRefine((theme, ctx) => {
+    for (const rule of THEME_CONTRAST_RULES) {
+      const ratio = contrastRatio(theme.colors[rule.fg], theme.colors[rule.bg])
+      if (ratio < rule.min) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["colors", rule.fg],
+          message: `contrast ${rule.fg}/${rule.bg} is ${ratio.toFixed(2)}, needs ${rule.min}`,
+        })
+      }
+    }
+  })
+
+const HomeSchema = z.strictObject({
+  hero: z.strictObject({
+    headline: line(1, 60),
+    subheadline: line(0, 160),
+    cta_label: line(1, 28),
+  }),
+  product_grid: z.strictObject({
+    title: line(1, 40),
+    empty_state: line(1, 120),
+  }),
+  about: z.strictObject({
+    title: line(1, 40),
+    body: paragraph(800),
   }),
 })
 
+export const StorefrontConfigV1Schema = z.strictObject({
+  schema_version: z.literal(1),
+  store: StoreSchema,
+  theme: z.strictObject({ preset: z.enum(["default"]) }),
+})
+
+export const StorefrontConfigSchema = z.strictObject({
+  schema_version: z.literal(STOREFRONT_SCHEMA_VERSION),
+  store: StoreSchema,
+  theme: ThemeSchema,
+  home: HomeSchema,
+})
+
 export type StorefrontConfig = z.infer<typeof StorefrontConfigSchema>
+export type StorefrontTheme = StorefrontConfig["theme"]
+export type StorefrontHome = StorefrontConfig["home"]
+
+export const DEFAULT_THEME: StorefrontTheme = {
+  preset: "default",
+  typography: "editorial",
+  corner: "soft",
+  colors: {
+    paper: "#fbfbf9",
+    ink: "#17191c",
+    muted: "#545a63",
+    accent: "#24594a",
+    accent_ink: "#ffffff",
+    line: "#e3e4df",
+  },
+}
+
+/** Bulgarian defaults: specific, calm, and free of invented claims. */
+export function defaultHome(storeName: string): StorefrontHome {
+  return {
+    hero: { headline: storeName.trim().slice(0, 60), subheadline: "", cta_label: "Към продуктите" },
+    product_grid: {
+      title: "Продукти",
+      empty_state: "Подготвяме продуктите. Заповядайте отново скоро.",
+    },
+    about: { title: "За нас", body: "" },
+  }
+}
 
 export class StorefrontConfigError extends Error {
   readonly issues: string[]
@@ -42,7 +173,21 @@ export function formatIssues(error: z.ZodError): string[] {
   return error.issues.map((issue) => `${issue.path.join(".") || "$"}: ${issue.message}`)
 }
 
+/** Parses v2, or upgrades a valid v1 config to v2. Always returns the current version. */
 export function parseStorefrontConfig(input: unknown): StorefrontConfig {
+  const version = (input as any)?.schema_version
+  if (version === 1) {
+    const v1 = StorefrontConfigV1Schema.safeParse(input)
+    if (!v1.success) {
+      throw new StorefrontConfigError(formatIssues(v1.error))
+    }
+    input = {
+      schema_version: STOREFRONT_SCHEMA_VERSION,
+      store: v1.data.store,
+      theme: DEFAULT_THEME,
+      home: defaultHome(v1.data.store.name),
+    }
+  }
   const result = StorefrontConfigSchema.safeParse(input)
   if (!result.success) {
     throw new StorefrontConfigError(formatIssues(result.error))
@@ -54,6 +199,7 @@ export function defaultStorefrontConfig(storeName: string): StorefrontConfig {
   return parseStorefrontConfig({
     schema_version: STOREFRONT_SCHEMA_VERSION,
     store: { name: storeName, locale: "bg-BG", currency_code: "eur" },
-    theme: { preset: "default" },
+    theme: DEFAULT_THEME,
+    home: defaultHome(storeName),
   })
 }

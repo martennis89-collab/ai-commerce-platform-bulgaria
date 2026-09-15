@@ -23,6 +23,13 @@ const Deployment = model
     error: model.text().nullable(),
     started_at: model.dateTime().nullable(),
     finished_at: model.dateTime().nullable(),
+    /** Durable execution lease (M2): only the holder of lease_token may complete the deployment. */
+    lease_owner: model.text().nullable(),
+    lease_token: model.text().nullable(),
+    lease_expires_at: model.dateTime().nullable(),
+    attempts: model.number().default(0),
+    /** Idempotency key of the request (e.g. an AI tool call); one deployment per key. */
+    request_key: model.text().unique().nullable(),
     project: model.belongsTo(() => StorefrontProject, { mappedBy: "deployments" }),
   })
   .indexes([

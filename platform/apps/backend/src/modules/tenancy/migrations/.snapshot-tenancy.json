@@ -696,7 +696,8 @@
             "inventory_item",
             "promotion",
             "cart",
-            "order"
+            "order",
+            "media_file"
           ],
           "mappedType": "enum"
         },

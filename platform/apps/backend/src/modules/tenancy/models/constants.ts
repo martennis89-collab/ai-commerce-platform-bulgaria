@@ -16,6 +16,7 @@ export const OWNED_RESOURCE_TYPES = [
   "promotion",
   "cart",
   "order",
+  "media_file",
 ] as const
 
 export type OwnedResourceType = (typeof OWNED_RESOURCE_TYPES)[number]

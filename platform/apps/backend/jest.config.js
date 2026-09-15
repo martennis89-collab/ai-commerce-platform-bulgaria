@@ -21,6 +21,9 @@ if (process.env.TEST_TYPE === "integration:http") {
   module.exports.testMatch = ["**/integration-tests/e2e/*.spec.[jt]s"]
 } else if (process.env.TEST_TYPE === "baseline") {
   module.exports.testMatch = ["**/integration-tests/baseline/*.spec.[jt]s"]
+} else if (process.env.TEST_TYPE === "live") {
+  // Opt-in real-provider smoke (M2-T15); never part of deterministic suites.
+  module.exports.testMatch = ["**/integration-tests/live/*.spec.[jt]s"]
 } else if (process.env.TEST_TYPE === "unit") {
   module.exports.testMatch = ["**/src/**/__tests__/**/*.unit.spec.[jt]s"]
 }
