@@ -6,6 +6,9 @@ import { WORKSPACE_ROOT } from "@platform/storefront-core"
 import { createPreviewGateway, PreviewRoute } from "../deploy/gateway"
 import { buildChildEnv } from "../deploy/local"
 
+const MARIA_ID = `dpl_${"M".repeat(26)}`
+const PETYA_ID = `dpl_${"P".repeat(26)}`
+
 describe("local build child environment", () => {
   it("passes only allow-listed OS variables and never backend secrets", () => {
     const env = buildChildEnv({
@@ -57,8 +60,8 @@ describe("preview gateway (host-routed static artifacts)", () => {
   beforeAll(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "m1-gateway-"))
     for (const [name, title] of [
-      ["maria", "Maria Candles"],
-      ["petya", "Petya Jewellery"],
+      [MARIA_ID, "Maria Candles"],
+      [PETYA_ID, "Petya Jewellery"],
     ]) {
       const out = path.join(root, "builds", name, "out")
       fs.mkdirSync(path.join(out, "about"), { recursive: true })
@@ -68,9 +71,9 @@ describe("preview gateway (host-routed static artifacts)", () => {
     }
     fs.writeFileSync(path.join(root, "secret.txt"), "backend secret")
     const routes: Record<string, PreviewRoute> = {
-      "maria-candles.preview.localhost": { hostname: "maria-candles.preview.localhost", deployment_id: "dpl_maria", artifact_ref: "builds/maria/out" },
-      "petya-jewellery.preview.localhost": { hostname: "petya-jewellery.preview.localhost", deployment_id: "dpl_petya", artifact_ref: "builds/petya/out" },
-      "escape.preview.localhost": { hostname: "escape.preview.localhost", deployment_id: "dpl_escape", artifact_ref: "../" },
+      "maria-candles.preview.localhost": { hostname: "maria-candles.preview.localhost", deployment_id: MARIA_ID, artifact_ref: `builds/${MARIA_ID}/out` },
+      "petya-jewellery.preview.localhost": { hostname: "petya-jewellery.preview.localhost", deployment_id: PETYA_ID, artifact_ref: `builds/${PETYA_ID}/out` },
+      "escape.preview.localhost": { hostname: "escape.preview.localhost", deployment_id: `dpl_${"E".repeat(26)}`, artifact_ref: "../" },
     }
     server = createPreviewGateway({
       deployRoot: root,
@@ -84,11 +87,11 @@ describe("preview gateway (host-routed static artifacts)", () => {
 
   it("serves each hostname only its own deployment artifact", async () => {
     const maria = await get("maria-candles.preview.localhost:8787")
-    expect(maria).toMatchObject({ status: 200, deployment: "dpl_maria" })
+    expect(maria).toMatchObject({ status: 200, deployment: MARIA_ID })
     expect(maria.body).toContain("Maria Candles")
     expect(maria.body).not.toContain("Petya")
     const petya = await get("petya-jewellery.preview.localhost", "/about/")
-    expect(petya).toMatchObject({ status: 200, deployment: "dpl_petya" })
+    expect(petya).toMatchObject({ status: 200, deployment: PETYA_ID })
     expect(petya.body).toBe("about Petya Jewellery")
   })
 
@@ -110,7 +113,7 @@ describe("preview gateway (host-routed static artifacts)", () => {
       expect(res.body).not.toContain("Petya")
       expect([200, 400, 404]).toContain(res.status)
       if (res.status === 200) {
-        expect(res.deployment).toBe("dpl_maria")
+        expect(res.deployment).toBe(MARIA_ID)
       }
     }
   )

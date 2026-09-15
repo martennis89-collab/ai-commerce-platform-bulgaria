@@ -30,11 +30,19 @@ const Deployment = model
     attempts: model.number().default(0),
     /** Idempotency key of the request (e.g. an AI tool call); one deployment per key. */
     request_key: model.text().unique().nullable(),
+    /** Monotonic per-project request order (M3-D11); the newest ready deployment is decided by it. */
+    sequence: model.number().nullable(),
+    /** The storefront revision this deployment builds. */
+    revision_id: model.text().nullable(),
+    /** Merchant user who requested it, when a merchant did. */
+    requested_by: model.text().nullable(),
     project: model.belongsTo(() => StorefrontProject, { mappedBy: "deployments" }),
   })
   .indexes([
     // @ts-ignore column inference for enum/text columns
     { on: ["store_environment_id", "target", "status"] },
+    // @ts-ignore column inference
+    { on: ["project_id", "target", "sequence"] },
   ])
 
 export default Deployment

@@ -1,14 +1,15 @@
 import { model } from "@medusajs/framework/utils"
 import AgentTask from "./agent-task"
 import PromptQueueItem from "./prompt-queue"
-import { RUN_STATUSES } from "./constants"
+import { RUN_KINDS, RUN_STATUSES } from "./constants"
 
 /** A durable AI run for one StoreEnvironment (Level 3 §5). */
 const AgentRun = model
   .define("ai_run", {
     id: model.id({ prefix: "arun" }).primaryKey(),
     store_environment_id: model.text(),
-    kind: model.enum(["initial_generation"]),
+    /** initial_generation (M2) or one designer turn (M3). */
+    kind: model.enum([...RUN_KINDS]),
     status: model.enum([...RUN_STATUSES]).default("queued"),
     /** Authenticated merchant user that started the run; the worker rebuilds ExecutionContext from it. */
     requested_by: model.text(),

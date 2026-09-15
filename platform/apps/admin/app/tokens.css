@@ -1,0 +1,43 @@
+/*
+ * Amboras admin design tokens — DESIGN.md §2 (approved, canonical for M3).
+ * Contrast of every text/control pair is documented in DESIGN.md §2.1.
+ * Components use these variables only; no raw colours outside this file.
+ */
+:root {
+  --amb-canvas: #f6f5f1;
+  --amb-surface: #ffffff;
+  --amb-sunken: #efeee9;
+  --amb-ink: #17191c;
+  --amb-muted: #545a63;
+  --amb-subtle: #6b7078;
+  --amb-line: #e1e0da;
+  --amb-line-strong: #858880;
+  --amb-accent: #24594a;
+  --amb-accent-hover: #1c4a3d;
+  --amb-accent-ink: #ffffff;
+  --amb-accent-soft: #e4eee9;
+  --amb-success: #1f7a4d;
+  --amb-warning: #8a5a00;
+  --amb-warning-soft: #fbf1dc;
+  --amb-danger: #b3261e;
+  --amb-danger-soft: #fbe9e7;
+  --amb-info: #245b9e;
+
+  --amb-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --amb-font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+
+  --amb-space-1: 4px;
+  --amb-space-2: 8px;
+  --amb-space-3: 12px;
+  --amb-space-4: 16px;
+  --amb-space-5: 24px;
+  --amb-space-6: 32px;
+  --amb-space-7: 48px;
+
+  --amb-radius: 8px;
+  --amb-radius-sm: 6px;
+  --amb-shadow-float: 0 8px 24px rgb(23 25 28 / 0.12);
+
+  --amb-selection-outer: #ffffff;
+  --amb-selection-inner: #17191c;
+}

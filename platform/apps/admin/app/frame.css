@@ -1,0 +1,53 @@
+/*
+ * Draft frame selection affordances — DESIGN.md §3.2. The ring uses a white and
+ * a dark outline together, so it is visible on any merchant theme (worst case
+ * 4.2:1) without putting Amboras colours into the merchant's store.
+ */
+.amb-frame [data-amb-element] {
+  cursor: pointer;
+}
+
+.amb-frame [data-amb-element]:hover {
+  outline: 1px dashed var(--amb-selection-inner);
+  outline-offset: 2px;
+}
+
+.amb-frame [data-amb-element]:focus-visible {
+  outline: 2px solid var(--amb-selection-inner);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--amb-selection-outer);
+}
+
+.amb-frame [data-amb-selected="true"] {
+  outline: 2px solid var(--amb-selection-inner);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--amb-selection-outer);
+  position: relative;
+}
+
+.amb-frame .amb-selection-tag {
+  position: fixed;
+  z-index: 50;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--amb-selection-inner);
+  color: var(--amb-selection-outer);
+  font-family: var(--amb-font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.amb-frame .amb-frame-loading {
+  font-family: var(--amb-font-sans);
+  color: var(--amb-muted);
+  padding: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .amb-frame * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

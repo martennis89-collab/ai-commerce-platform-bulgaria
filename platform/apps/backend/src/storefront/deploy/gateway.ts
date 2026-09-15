@@ -18,6 +18,7 @@ import type StorefrontModuleService from "../../modules/storefront/service"
 import { TENANCY_MODULE } from "../../modules/tenancy"
 import type TenancyModuleService from "../../modules/tenancy/service"
 import { normalizeHostname } from "../../tenancy/hostname"
+import { NEWEST_DEPLOYMENT_ORDER } from "../ordering"
 import { localDeployRoot, previewGatewayPort } from "../platform-config"
 
 export type PreviewRoute = { hostname: string; deployment_id: string; artifact_ref: string }
@@ -59,10 +60,15 @@ export async function resolvePreviewRoute(
   if (!key || (key.revoked_at && new Date(key.revoked_at) <= new Date())) {
     return null
   }
-  const [deployment] = (await storefront.listDeployments(
-    { project_id: project.id, target: "preview", status: "ready" },
-    { order: { id: "DESC" }, take: 1 }
-  )) as any[]
+  const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+  const [deployment] = ((
+    await knex.raw(
+      `SELECT id, hostname, artifact_ref, store_environment_id FROM storefront_deployment
+        WHERE project_id = ? AND target = 'preview' AND status = 'ready' AND deleted_at IS NULL
+        ORDER BY ${NEWEST_DEPLOYMENT_ORDER} LIMIT 1`,
+      [project.id]
+    )
+  )?.rows ?? []) as any[]
   if (
     !deployment?.artifact_ref ||
     deployment.hostname !== host ||
@@ -101,8 +107,21 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
+/** Previews are never framed (M3-D1 renders drafts inside the admin instead). */
+const SECURITY_HEADERS = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+}
+
+/** The only artifact location a deployment may be served from (review N-c, hardened in M3). */
+export function expectedArtifactRef(deploymentId: string): string | null {
+  return /^dpl_[0-9A-Z]{26}$/.test(deploymentId) ? `builds/${deploymentId}/out` : null
+}
+
 function send(res: http.ServerResponse, status: number, body = "") {
-  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" })
+  res.writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...SECURITY_HEADERS })
   res.end(body || http.STATUS_CODES[status])
 }
 
@@ -120,10 +139,20 @@ export function createPreviewGateway(options: {
       if (!route) {
         return send(res, 404)
       }
-      // Containment is checked on real paths, so symlinks/junctions cannot escape.
+      // The artifact must be exactly builds/<deployment_id>/out, checked on real paths so
+      // symlinks/junctions can neither escape the deploy root nor alias another deployment.
+      const expectedRef = expectedArtifactRef(route.deployment_id)
+      if (!expectedRef || route.artifact_ref !== expectedRef) {
+        return send(res, 404)
+      }
       const realRoot = realpathOrNull(deployRoot)
-      const realArtifact = realpathOrNull(path.resolve(deployRoot, route.artifact_ref))
-      if (!realRoot || !realArtifact || !isInside(realRoot, realArtifact) || realArtifact === realRoot) {
+      const realArtifact = realpathOrNull(path.resolve(deployRoot, expectedRef))
+      if (
+        !realRoot ||
+        !realArtifact ||
+        realArtifact !== path.join(realRoot, "builds", route.deployment_id, "out") ||
+        !isInside(realRoot, realArtifact)
+      ) {
         return send(res, 404)
       }
       let pathname: string
@@ -155,7 +184,7 @@ export function createPreviewGateway(options: {
       res.writeHead(status, {
         "content-type": CONTENT_TYPES[path.extname(realFile).toLowerCase()] ?? "application/octet-stream",
         "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
+        ...SECURITY_HEADERS,
         "x-platform-deployment": route.deployment_id,
       })
       if (req.method === "HEAD") {

@@ -15,11 +15,15 @@ import fs from "fs"
 import path from "path"
 import {
   formatIssues,
+  MEDIA_ID_RE,
+  mediaIdsOf,
   parseStorefrontConfig,
   StorefrontConfig,
   StorefrontConfigError,
   z,
 } from "@platform/storefront-schema"
+
+export * from "./bridge"
 
 const PACKAGE_DIR = path.resolve(__dirname, "..")
 const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_DIR, "package.json"), "utf8"))
@@ -31,7 +35,8 @@ export const CORE_NODE_MODULES = path.join(PACKAGE_DIR, "node_modules")
 /** `platform/` — the common root of core dependencies and local build directories. */
 export const WORKSPACE_ROOT = path.resolve(PACKAGE_DIR, "..", "..")
 export const MANIFEST_FILENAME = "platform-deployment.json"
-export const MANIFEST_VERSION = 1 as const
+/** v2 (M3) adds the deployed revision and the server-resolved map of owned media the config references. */
+export const MANIFEST_VERSION = 2 as const
 
 const HOSTNAME = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/
 
@@ -45,6 +50,12 @@ export const DeploymentManifestSchema = z.strictObject({
   core_version: z.string().min(1),
   backend_url: z.string().regex(/^https?:\/\/[^\s/]+(\/.*)?$/),
   publishable_key: z.string().regex(/^pk_[A-Za-z0-9]+$/),
+  revision_id: z.string().regex(/^srev_[0-9A-Z]{26}$/).nullable(),
+  /** Owned media referenced by the config, resolved to URLs by the server (never supplied by config). */
+  media: z.record(
+    z.string().regex(MEDIA_ID_RE),
+    z.strictObject({ url: z.string().regex(/^https?:\/\/[^\s"'<>]+$/) })
+  ),
   config: z.unknown(),
 })
 
@@ -75,6 +86,11 @@ export function validateDeploymentManifest(
     config = parseStorefrontConfig(result.data.config)
   } catch (e) {
     throw new ManifestError(e instanceof StorefrontConfigError ? e.issues.map((i) => `config.${i}`) : ["config: invalid"])
+  }
+  const referenced = new Set(mediaIdsOf(config))
+  const unreferenced = Object.keys(result.data.media).filter((id) => !referenced.has(id))
+  if (unreferenced.length) {
+    throw new ManifestError([`media: entries not referenced by the config: ${unreferenced.join(", ")}`])
   }
   const available = options.availableCoreVersion ?? STOREFRONT_CORE_VERSION
   if (result.data.core_version !== available) {

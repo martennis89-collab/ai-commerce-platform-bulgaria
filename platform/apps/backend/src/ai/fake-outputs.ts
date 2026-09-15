@@ -90,6 +90,112 @@ registerFakeGenerator("offers.suggest", (input) => {
   }
 })
 
+/** Deterministic designer turn: keyword rules over the merchant message and the server-resolved selection. */
+registerFakeGenerator("designer.plan", (input) => {
+  const message = String(input.message ?? "")
+  const lower = message.toLowerCase()
+  const selected = input.selected_element as
+    | { section_id: string; section_type: string; field: string | null; item_index: number | null; value: string | null }
+    | null
+  const sections = (input.sections ?? []) as { id: string; type: string; variant: string; image?: unknown }[]
+  const theme = input.theme as { colors: Record<string, string> } | undefined
+
+  if (/продукт|цен[аи]|наличност|на живо|публикува|html|css|код|шрифтов файл/.test(lower)) {
+    return {
+      reply: "Продуктите и цените не се променят оттук. Тук променям външния вид и текстовете на магазина.",
+      operations: [],
+    }
+  }
+  const quoted = /[„"«]([^“"»]{1,200})[“"»]/.exec(message)?.[1]
+  const copyField = selected?.field && !["image"].includes(selected.field) ? selected.field : null
+  if (selected && copyField && quoted) {
+    return {
+      reply: "Промених текста.",
+      operations: [
+        {
+          op: "section.update_copy",
+          args: { section_id: selected.section_id, field: copyField, item_index: selected.item_index, value: quoted },
+        },
+      ],
+    }
+  }
+  if (selected && copyField && selected.value && /кратк|съкрати/.test(lower)) {
+    const words = selected.value.split(/\s+/).filter(Boolean)
+    const shorter = words.slice(0, Math.max(1, Math.ceil(words.length / 2))).join(" ")
+    return {
+      reply: "Съкратих текста.",
+      operations: [
+        {
+          op: "section.update_copy",
+          args: { section_id: selected.section_id, field: copyField, item_index: selected.item_index, value: shorter },
+        },
+      ],
+    }
+  }
+  if (/по-тъм|тъмен|цвят|цветове/.test(lower) && theme) {
+    const darker = (hex: string) =>
+      "#" +
+      [1, 3, 5]
+        .map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * 0.75).toString(16).padStart(2, "0"))
+        .join("")
+    return {
+      reply: "Направих основния цвят по-тъмен.",
+      operations: [
+        {
+          op: "theme.update_tokens",
+          args: {
+            typography: null,
+            corner: null,
+            colors: { paper: null, ink: null, muted: null, accent: darker(theme.colors.accent), accent_ink: null, line: null },
+          },
+        },
+      ],
+    }
+  }
+  if (/модерн/.test(lower)) {
+    return {
+      reply: "Смених шрифта на по-модерен.",
+      operations: [{ op: "theme.update_tokens", args: { typography: "modern", corner: null, colors: null } }],
+    }
+  }
+  if (selected && /нагоре|по-напред/.test(lower)) {
+    const order = sections.map((s) => s.id)
+    const i = order.indexOf(selected.section_id)
+    if (i > 1) {
+      ;[order[i - 1], order[i]] = [order[i], order[i - 1]]
+      return { reply: "Преместих секцията по-нагоре.", operations: [{ op: "section.reorder", args: { order } }] }
+    }
+  }
+  if (selected && /оформлен|вариант|колони/.test(lower)) {
+    const section = sections.find((s) => s.id === selected.section_id)
+    const variants: Record<string, [string, string]> = {
+      hero: ["text", "image"],
+      highlights: ["list", "columns"],
+      product_grid: ["grid", "compact"],
+      image_banner: ["full", "contained"],
+      about: ["text", "image"],
+      faq: ["list", "details"],
+    }
+    if (section) {
+      const [a, b] = variants[section.type]
+      const variant = section.variant === a ? b : a
+      if (variant !== "image" || section.image) {
+        return {
+          reply: "Смених оформлението на секцията.",
+          operations: [{ op: "section.set_variant", args: { section_id: section.id, variant } }],
+        }
+      }
+    }
+  }
+  if (/обнови прегледа|към прегледа/.test(lower)) {
+    return { reply: "Обновявам прегледа.", operations: [{ op: "storefront.promote_preview", args: {} }] }
+  }
+  return {
+    reply: "Посочете какво точно да променим, например: направете заглавието по-кратко.",
+    operations: [],
+  }
+})
+
 registerFakeGenerator("followup.route", (input) => {
   const prompt = String(input.prompt ?? "")
   const lower = prompt.toLowerCase()

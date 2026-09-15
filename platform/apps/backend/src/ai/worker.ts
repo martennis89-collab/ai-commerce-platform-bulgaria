@@ -23,6 +23,7 @@ import { merchantTextOf, recomputeRun, StartGenerationInput } from "./runs"
 import { sqlRows } from "./sql"
 import { TASK_IMPLEMENTATIONS } from "./tasks"
 import { executeAiTool } from "./tools"
+import { settleDesignerTurn } from "../designer/turns"
 
 export type TaskRuntime = {
   ctx: ExecutionContext
@@ -155,7 +156,10 @@ function classify(error: any): { retryable: boolean; code: string } {
   if (error instanceof ModelRequestError) return { retryable: false, code: "model_unavailable" }
   if (error instanceof ModelOutputError) return { retryable: false, code: "model_output_rejected" }
   if (error instanceof ToolRejectedError) return { retryable: false, code: "policy_rejected" }
-  if (error instanceof LimitReachedError) return { retryable: false, code: "limit_reached" }
+  if (error instanceof LimitReachedError || error?.name === "RateLimitError") return { retryable: false, code: "limit_reached" }
+  // The draft head moved during the task (another edit or a restore): re-read and retry. A restore also
+  // cancels designer turns, so a cancelled run is never retried into overwriting the restored draft.
+  if (error?.name === "RevisionConflictError") return { retryable: true, code: "revision_conflict" }
   if (
     error instanceof MedusaError &&
     [MedusaError.Types.NOT_FOUND, MedusaError.Types.NOT_ALLOWED, MedusaError.Types.UNAUTHORIZED, MedusaError.Types.FORBIDDEN].includes(error.type as any)
@@ -201,12 +205,17 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
       throw new LimitReachedError("run missing")
     }
     // Tenant context comes from the run's requesting merchant, rebuilt server-side, never from task data.
-    const ctx = await buildMerchantExecutionContext(container, run.requested_by)
+    const designerTurn = run.kind === "designer_edit" ? (run.input as { assistant_message_id: string; selected_element_id: string | null }) : null
+    const ctx = await buildMerchantExecutionContext(container, run.requested_by, {
+      current_page: designerTurn ? "designer" : null,
+      // Trusted server data only: the selection the server resolved when the merchant sent the message.
+      selected_entity: designerTurn?.selected_element_id ? { type: "storefront_element", id: designerTurn.selected_element_id } : null,
+    })
     if (ctx.store_environment.id !== task.store_environment_id || run.store_environment_id !== task.store_environment_id) {
       throw new ToolRejectedError("policy", "execution context does not match the run's store environment")
     }
     const input = run.input as StartGenerationInput
-    const merchantText = merchantTextOf(input)
+    const merchantText = run.kind === "designer_edit" ? String((run.input as any).content ?? "") : merchantTextOf(input)
     let lastModel: { provider: string | null; model: string | null } = { provider: null, model: null }
 
     const rt: TaskRuntime = {
@@ -257,7 +266,16 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
       async tool(name, args, idempotencyKey) {
         await checkpoint()
         return executeAiTool(
-          { ctx, runId: run.id, taskId: task.id, leaseToken: token, actor: { user_id: ctx.user.id, ...lastModel }, merchantText, limits },
+          {
+            ctx,
+            runId: run.id,
+            taskId: task.id,
+            leaseToken: token,
+            actor: { user_id: ctx.user.id, ...lastModel },
+            merchantText,
+            limits,
+            designerMessageId: designerTurn?.assistant_message_id ?? null,
+          },
           name,
           args,
           `${task.task_key}:${idempotencyKey}`
@@ -297,6 +315,9 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
   } finally {
     clearInterval(timer)
     await recomputeRun(container, task.run_id).catch(() => undefined)
+    if (run?.kind === "designer_edit") {
+      await settleDesignerTurn(container, task.run_id).catch(() => undefined)
+    }
   }
 }
 

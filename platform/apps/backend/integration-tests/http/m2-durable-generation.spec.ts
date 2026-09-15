@@ -11,7 +11,7 @@ import http from "http"
 import path from "path"
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { ContainerRegistrationKeys } from "@medusajs/framework/utils"
-import { DEFAULT_THEME, parseStorefrontConfig } from "@platform/storefront-schema"
+import { DEFAULT_THEME, findSection, parseStorefrontConfig } from "@platform/storefront-schema"
 import { bearer, call, createUserWithToken } from "../fixtures/http"
 import { AI_MODULE } from "../../src/modules/ai"
 import { STOREFRONT_MODULE } from "../../src/modules/storefront"
@@ -292,9 +292,9 @@ medusaIntegrationTestRunner({
         ])
 
         const config = await projectConfig(store)
-        expect(config.schema_version).toBe(2)
-        expect(config.home.hero.headline).toBe("Sofia Candles")
-        expect(config.home.about.body).toBe(DESCRIPTION)
+        expect(config.schema_version).toBe(3)
+        expect(findSection(config, "hero")!.headline).toBe("Sofia Candles")
+        expect(findSection(config, "about")!.body).toBe(DESCRIPTION)
         const [project] = await storefront().listStorefrontProjects({ id: store.projectId })
         expect(project.core_version).toBe("0.2.0")
 
@@ -411,7 +411,7 @@ medusaIntegrationTestRunner({
         expect(applied.theme_source).toBe("platform_default")
         const after = await projectConfig(kalina)
         expect(after.theme).toEqual({ ...DEFAULT_THEME, typography: "modern", corner: "square" })
-        expect(after.schema_version).toBe(2)
+        expect(after.schema_version).toBe(3)
         await call(api.post(`/merchant/ai/runs/${run.id}/cancel`, {}, bearer(kalina.token)))
       })
     })
@@ -594,7 +594,7 @@ medusaIntegrationTestRunner({
         const p1Brand = fromP1.find((t) => t.task_key === "brand")
         expect(all.filter((t) => t.task_key === "brand" && t.superseded_by === p1Brand.id)).toHaveLength(1)
         expect(fromP1.find((t) => t.task_key === "storefront").superseded_by).toBe(fromP2[0].id)
-        expect((await projectConfig(store)).home.hero.subheadline).toContain("акцент върху дегустациите")
+        expect(findSection(await projectConfig(store), "hero")!.subheadline).toContain("акцент върху дегустациите")
 
         // A worker crashed while routing a follow-up: its task was created but the prompt stayed 'processing'.
         expect((await call(api.post(`/merchant/ai/runs/${run.id}/prompts`, { prompt: "Добавете оферта за комплект." }, bearer(store.token)))).status).toBe(202)

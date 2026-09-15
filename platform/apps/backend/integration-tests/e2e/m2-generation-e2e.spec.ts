@@ -9,7 +9,7 @@ import http from "http"
 import path from "path"
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { WORKSPACE_ROOT } from "@platform/storefront-core"
-import { parseStorefrontConfig } from "@platform/storefront-schema"
+import { findSection, parseStorefrontConfig } from "@platform/storefront-schema"
 import { createSharedRegion } from "../fixtures/commerce"
 import { bearer, createUserWithToken } from "../fixtures/http"
 import { AI_MODULE } from "../../src/modules/ai"
@@ -154,10 +154,10 @@ medusaIntegrationTestRunner({
         expect(res.body).toContain('lang="bg"')
         expect(res.body).toContain(`data-typography="${config.theme.typography}"`)
         expect(res.body.toLowerCase()).toContain(config.theme.colors.accent.toLowerCase())
-        expect(res.body).toContain(config.home.hero.headline)
-        expect(res.body).toContain(config.home.about.title)
+        expect(res.body).toContain(findSection(config, "hero")!.headline)
+        expect(res.body).toContain(findSection(config, "about")!.title)
         expect(res.body).toContain(store.description.split(".")[0])
-        expect(res.body).toContain(config.home.product_grid.empty_state)
+        expect(res.body).toContain(findSection(config, "product_grid")!.empty_state)
         expect(res.body).not.toContain(store.product)
         expect(res.body).not.toContain(other.name)
         expect(res.body).not.toContain(other.description.split(".")[0])

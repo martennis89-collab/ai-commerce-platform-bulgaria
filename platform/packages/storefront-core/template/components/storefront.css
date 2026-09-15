@@ -1,0 +1,377 @@
+/*
+ * storefront-core 0.3.0: one strong idea, the merchant's name and products set
+ * with confident typography on a quiet page. Colours come only from the
+ * validated theme tokens; no gradients, glass or decorative effects.
+ * Every rule is scoped under .amb-storefront so the same renderer can run
+ * inside the admin draft preview without touching admin styles.
+ */
+.amb-storefront,
+.amb-storefront *,
+.amb-storefront *::before,
+.amb-storefront *::after {
+  box-sizing: border-box;
+}
+
+.amb-storefront {
+  --heading-font: ui-serif, Georgia, "Times New Roman", serif;
+  --body-font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body-font);
+  font-size: 1rem;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+.amb-storefront[data-typography="modern"] {
+  --heading-font: var(--body-font);
+}
+
+.amb-storefront a {
+  color: inherit;
+}
+
+.amb-storefront :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.amb-storefront img {
+  max-width: 100%;
+  display: block;
+}
+
+.amb-storefront .frame {
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.25rem;
+}
+
+.amb-storefront .site-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.amb-storefront .site-header-inner {
+  display: flex;
+  align-items: center;
+  min-height: 3.5rem;
+}
+
+.amb-storefront .wordmark {
+  font-family: var(--heading-font);
+  font-size: 1.125rem;
+  font-weight: 600;
+  text-decoration: none;
+  letter-spacing: 0.01em;
+}
+
+.amb-storefront h1,
+.amb-storefront h2,
+.amb-storefront h3 {
+  overflow-wrap: anywhere;
+}
+
+/* Hero */
+.amb-storefront .hero {
+  padding-top: 2.75rem;
+  padding-bottom: 2.5rem;
+}
+
+.amb-storefront .hero h1 {
+  font-family: var(--heading-font);
+  font-weight: 600;
+  font-size: clamp(1.875rem, 1.35rem + 2.2vw, 2.75rem);
+  line-height: 1.15;
+  max-width: 22ch;
+  margin: 0 0 0.875rem;
+}
+
+.amb-storefront .hero-sub {
+  color: var(--muted);
+  font-size: 1.0625rem;
+  max-width: 44ch;
+  margin: 0 0 1.5rem;
+}
+
+.amb-storefront .hero-media,
+.amb-storefront .about-media {
+  margin-top: 1.5rem;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  aspect-ratio: 4 / 3;
+}
+
+.amb-storefront .hero-media img,
+.amb-storefront .about-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.amb-storefront .button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 1.125rem;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* Shared section rhythm */
+.amb-storefront .products,
+.amb-storefront .about,
+.amb-storefront .highlights,
+.amb-storefront .faq {
+  padding-top: 2rem;
+  padding-bottom: 2.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.amb-storefront .section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.amb-storefront .section-head h2,
+.amb-storefront .about h2,
+.amb-storefront .highlights h2,
+.amb-storefront .faq h2 {
+  font-family: var(--heading-font);
+  font-weight: 600;
+  font-size: 1.5rem;
+  line-height: 1.25;
+  margin: 0;
+}
+
+/* Highlights */
+.amb-storefront .highlight-list {
+  list-style: none;
+  margin: 1.25rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.amb-storefront .highlight h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.amb-storefront .highlight p {
+  margin: 0;
+  color: var(--muted);
+  max-width: 44ch;
+}
+
+/* Products */
+.amb-storefront .count,
+.amb-storefront .price {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.amb-storefront .empty {
+  color: var(--muted);
+  margin: 0;
+  max-width: 44ch;
+}
+
+.amb-storefront .product-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem 1rem;
+}
+
+.amb-storefront .product h3 {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.35;
+  margin: 0.625rem 0 0.125rem;
+}
+
+.amb-storefront .product-media {
+  aspect-ratio: 4 / 5;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--heading-font);
+  font-size: 2rem;
+}
+
+.amb-storefront .product-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.amb-storefront .product p {
+  margin: 0;
+}
+
+.amb-storefront .product-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.amb-storefront .product-list .product {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: 0.875rem;
+  align-items: center;
+}
+
+.amb-storefront .product-list .product-media {
+  aspect-ratio: 1 / 1;
+  font-size: 1.25rem;
+}
+
+.amb-storefront .product-list .product h3 {
+  margin: 0;
+}
+
+/* Image banner */
+.amb-storefront .banner {
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+}
+
+.amb-storefront .banner-figure {
+  margin: 0;
+  overflow: hidden;
+  aspect-ratio: 16 / 7;
+}
+
+.amb-storefront .banner--contained .banner-figure {
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+}
+
+.amb-storefront .banner-figure img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.amb-storefront .banner-caption {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.amb-storefront .banner--contained .banner-caption {
+  padding: 0;
+}
+
+/* About */
+.amb-storefront .about-body {
+  max-width: 62ch;
+  margin-top: 1rem;
+}
+
+.amb-storefront .about-body p {
+  margin: 0 0 0.875rem;
+}
+
+.amb-storefront .draft-placeholder {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* FAQ */
+.amb-storefront .faq-items {
+  margin-top: 1.25rem;
+  display: grid;
+  gap: 1rem;
+  max-width: 62ch;
+}
+
+.amb-storefront .faq-item h3,
+.amb-storefront .faq-item summary {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.amb-storefront .faq-item summary {
+  cursor: pointer;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+}
+
+.amb-storefront .faq--details .faq-item {
+  border-bottom: 1px solid var(--line);
+}
+
+.amb-storefront .faq-answer p {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--muted);
+}
+
+.amb-storefront .site-footer {
+  border-top: 1px solid var(--line);
+  padding: 1.5rem 0 2rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+@media (min-width: 48rem) {
+  .amb-storefront .frame {
+    padding: 0 2rem;
+  }
+  .amb-storefront .hero {
+    padding-top: 4.5rem;
+    padding-bottom: 3.5rem;
+  }
+  .amb-storefront .hero--image,
+  .amb-storefront .about--image {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 2.5rem;
+    align-items: center;
+  }
+  .amb-storefront .hero--image .hero-media,
+  .amb-storefront .about--image .about-media {
+    margin-top: 0;
+  }
+  .amb-storefront .product-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2rem 1.5rem;
+  }
+  .amb-storefront .highlights--columns .highlight-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.5rem;
+  }
+}
+
+@media (min-width: 72rem) {
+  .amb-storefront .product-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .amb-storefront * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
