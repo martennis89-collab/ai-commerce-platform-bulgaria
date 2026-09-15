@@ -95,8 +95,9 @@
   - The baseline run rewrote `baseline-observations.json` with new generated ids only; it was restored with git.
 - **Full regression, run 2 (after the test updates and migration backfill).** Integration: 4 suites, 90/90 (M0, M1, M2, M3). Together with run 1: typecheck clean, unit 218/218, e2e 9/9, baseline 6/6. The e2e and baseline runs came before the backfill was added. They migrate empty databases, where the backfill is a no-op.
 - **Reviews done inline:** durable agent, tenant isolation, security (preview bridge), UI evidence. Findings and fixes are listed above.
+- **Pushed and opened as a draft PR.** `mission/m3-contextual-designer` was pushed at `29ac65e`. Draft PR [#4](https://github.com/martennis89-collab/ai-commerce-platform-bulgaria/pull/4) targets `main`. No merge, no tag, no M4.
 - **Remaining:**
-  - Push `mission/m3-contextual-designer` and open a draft PR into `main`. No merge, no tag, no M4.
+  - Independent review of PR #4, then user acceptance.
   - Live smoke M3-T16: pending until the Anthropic key is rotated, unless the user waives it. It is the only open acceptance item.
 
 ## Previous status
