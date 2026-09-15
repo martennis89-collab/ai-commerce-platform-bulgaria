@@ -231,6 +231,13 @@ body {
   color: var(--amb-danger);
 }
 
+.amb-admin .promote-status a {
+  color: var(--amb-accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .amb-admin .canvas {
   padding: var(--amb-space-5);
   min-height: 0;

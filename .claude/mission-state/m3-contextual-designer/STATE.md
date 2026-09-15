@@ -79,6 +79,10 @@
       - Fixed with an admin-wide `.amb-admin [hidden] { display: none !important }`. Only the two mobile views use `hidden`.
       - On phones, the canvas and rail also span `grid-column: 1 / -1`.
       - The e2e now asserts that the canvas is hidden and the rail is at x=0 with a 375px width. The old document scroll-width check missed this because the overflow sat inside the fixed-height shell.
+  - **Final visual check (M3 e2e 4/4, commit `a6e4dd9`).**
+    - Correct: mobile store, sheet and conversation views at 375px; desktop draft, thread, history drawer and promotion status at 1440px.
+    - The "Отвори прегледа" link used the browser's default blue; it is now styled with the accent token.
+    - The screenshot thumbnail appears broken in e2e only. Medusa's local file provider defaults file URLs to `http://localhost:9000/static`, while the test backend runs on a random port. The stored PNG itself is verified (size, ownership), and on a backend at port 9000 the image loads.
   - **Test isolation.** M3-T08 asserted a headline set by the desktop test, but the runner restores the database before each test. It now asserts that screenshots leave the draft unchanged: same head revision and headline before and after.
   - **Security (preview bridge).** Both directions of the admin bridge check the exact admin origin and exact source window: `Designer` accepts only the iframe's `contentWindow`, and `DraftFrame` only `window.parent`. Every `postMessage` targets `window.location.origin` and never `"*"`. Selections are still re-resolved by the server (D6), so a forged frame message cannot select another store's element.
 - **Pending:**

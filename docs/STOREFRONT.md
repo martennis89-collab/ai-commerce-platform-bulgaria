@@ -145,6 +145,7 @@ npm run preview:gateway     # serves ready previews on http://<handle>.preview.l
 - **Screenshots (M3-D7).** `POST /merchant/designer/screenshots` uses Playwright Chromium.
   - The page origin is the preview hostname, but every request for it is answered from `builds/<deployment_id>/out` on disk.
   - Only GETs for the store's own media (`/static/<store_environment_id>/…`) may reach the network; everything else is aborted.
+  - Media and screenshot URLs come from Medusa's file provider. The local provider defaults to `http://localhost:9000/static`, so a deployment must configure the provider's URL to its public backend origin. Test backends on random ports therefore show broken thumbnails, while the stored files are still verified.
 
 ## 9. Merchant, operator and AI surfaces
 
