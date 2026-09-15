@@ -298,11 +298,19 @@ medusaIntegrationTestRunner({
       const text = await page.locator("body").innerText()
       expect(text).not.toMatch(ENGLISH_UI)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-      await page.keyboard.press("Tab")
-      const focusOutline = await page.evaluate(() => {
-        const el = document.activeElement as HTMLElement | null
-        return el ? getComputedStyle(el).outlineStyle : "none"
-      })
+      // Keyboard focus on an admin control shows a visible ring (focus inside the draft frame has its own ring).
+      let focusOutline = "none"
+      for (let i = 0; i < 30; i++) {
+        await page.keyboard.press("Tab")
+        const focused = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null
+          return el && ["BUTTON", "A", "TEXTAREA"].includes(el.tagName) ? getComputedStyle(el).outlineStyle : null
+        })
+        if (focused !== null) {
+          focusOutline = focused
+          break
+        }
+      }
       expect(focusOutline).not.toBe("none")
       await context.close()
     })
@@ -326,6 +334,10 @@ medusaIntegrationTestRunner({
       await sheet.getByLabel("Съобщение").fill("Какво може да се промени тук?")
       await sheet.getByRole("button", { name: "Изпрати" }).click()
       await page.getByRole("tab", { name: "Разговор" }).click()
+      // Only the active view is laid out: the store frame is hidden and the conversation spans the phone width.
+      expect(await page.locator("main.canvas").isHidden()).toBe(true)
+      const rail = await page.locator("aside.rail").boundingBox()
+      expect(rail).toMatchObject({ x: 0, width: 375 })
       const dot = page.locator(".status-dot").first()
       if (await dot.count()) {
         expect(await dot.evaluate((el: Element) => getComputedStyle(el).animationName)).toBe("none")
@@ -340,6 +352,8 @@ medusaIntegrationTestRunner({
 
     it("M3-T08 screenshots render only the store's own ready artifact and are owned media", async () => {
       const maria = stores.maria
+      // The runner restores the database before each test, so this starts from the store's initial draft.
+      const headBefore = (await api.get("/merchant/designer", bearer(maria.token))).data.designer.head
       const ready = (await sql(`SELECT * FROM storefront_deployment WHERE project_id = ? AND status = 'ready' AND target = 'preview'`, [maria.projectId]))[0]
       expect(ready).toBeTruthy()
       const shot = await call(api.post("/merchant/designer/screenshots", { deployment_id: ready.id, viewport: "mobile" }, bearer(maria.token)))
@@ -360,8 +374,10 @@ medusaIntegrationTestRunner({
       const limited = await call(api.post("/merchant/designer/screenshots", { deployment_id: ready.id, viewport: "desktop" }, bearer(maria.token)))
       expect([limited.status, limited.data.kind]).toEqual([429, "screenshot"])
       delete process.env.STOREFRONT_MAX_SCREENSHOTS_PER_HOUR
-      const config = (await api.get("/merchant/designer", bearer(maria.token))).data.designer.head.config
-      expect(findSection(config, "hero")!.headline).toBe("Свещи от София")
+      // Screenshots are read-only for the draft: no new revision, same content.
+      const headAfter = (await api.get("/merchant/designer", bearer(maria.token))).data.designer.head
+      expect(headAfter.id).toBe(headBefore.id)
+      expect(findSection(headAfter.config, "hero")!.headline).toBe(findSection(headBefore.config, "hero")!.headline)
     })
   },
 })

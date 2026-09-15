@@ -291,7 +291,8 @@ export default function Designer({ backendUrl, token }) {
     </span>
   ) : null
 
-  const composer = (
+  // Rendered in the rail and, on phones, in the bottom sheet: each placement needs its own label/textarea id.
+  const renderComposer = (placement) => (
     <form className="composer" onSubmit={send}>
       {selection ? (
         <span className="chip">
@@ -308,11 +309,11 @@ export default function Designer({ backendUrl, token }) {
       ) : null}
       {state.can_design ? (
         <div className="composer-row">
-          <label className="visually-hidden" htmlFor="designer-composer">
+          <label className="visually-hidden" htmlFor={`designer-composer-${placement}`}>
             {t.composerLabel}
           </label>
           <textarea
-            id="designer-composer"
+            id={`designer-composer-${placement}`}
             rows={1}
             value={draft}
             placeholder={t.composerPlaceholder}
@@ -426,10 +427,10 @@ export default function Designer({ backendUrl, token }) {
         >
           {banner ? <div className={`banner banner-${banner.kind}`}>{banner.text}</div> : null}
           {thread}
-          {composer}
+          {renderComposer("rail")}
         </aside>
 
-        {isMobile && mobileView === "store" && selection ? <div className="sheet">{composer}</div> : null}
+        {isMobile && mobileView === "store" && selection ? <div className="sheet">{renderComposer("sheet")}</div> : null}
 
         {isMobile && unpromoted && state.can_deploy && !selection && mobileView === "store" ? (
           <div className="sticky-promote">

@@ -65,6 +65,22 @@
   - **Sign-in diagnostics.** A failing sign-in in the e2e now records console errors, failed requests, the page text and a screenshot.
   - **Live smoke spec.** Added the opt-in M3-T16 spec `integration-tests/live/m3-designer-smoke.spec.ts`. It skips without a key and has not been run.
   - **Latest results:** unit 218/218; M3 integration 12/12; typecheck clean.
+- **Inline reviews (in progress).**
+  - **Durable agent.** Plan reuse on retry fixed (above). Terminal settle is idempotent; cancel stops queued tasks and running turns at their checkpoint.
+  - **Tenant isolation.** Every raw SQL statement in the new designer, turn, rate-limit, SSE and revision code is scoped by `store_environment_id` or by a server-resolved, environment-scoped id.
+    - Defence in depth added: the session and message UPDATEs in `sendMessage` now also filter by `store_environment_id`.
+    - `commitDraftRevision`'s action-key replay returns 404 for a foreign match.
+    - `ensureHeadRevision` reads the head id from the locked, scoped project row.
+  - **UI (visual evidence check, amboras-impeccable-ui).** Desktop at 1440px is correct. Real defects were found at 375px and fixed:
+    - The Магазин/Разговор tablist took the whole `1fr` grid row and pushed the store frame off-screen. Phones now use rows `56px auto minmax(0, 1fr)`, with the canvas and rail in row 3.
+    - The composer rendered in both the rail and the bottom sheet with the same `id`, so the sheet textarea had no accessible name. It is now `renderComposer(placement)` with unique ids.
+    - The e2e focus assertion now tabs to an admin control before checking the ring. One Tab could land on the iframe.
+    - At 375px the conversation view still laid out the hidden store frame. `.canvas` sets `display`, which overrode the `hidden` attribute, and the grid added an implicit column: the frame shrank to about 50px and the top bar shifted.
+      - Fixed with an admin-wide `.amb-admin [hidden] { display: none !important }`. Only the two mobile views use `hidden`.
+      - On phones, the canvas and rail also span `grid-column: 1 / -1`.
+      - The e2e now asserts that the canvas is hidden and the rail is at x=0 with a 375px width. The old document scroll-width check missed this because the overflow sat inside the fixed-height shell.
+  - **Test isolation.** M3-T08 asserted a headline set by the desktop test, but the runner restores the database before each test. It now asserts that screenshots leave the draft unchanged: same head revision and headline before and after.
+  - **Security (preview bridge).** Both directions of the admin bridge check the exact admin origin and exact source window: `Designer` accepts only the iframe's `contentWindow`, and `DraftFrame` only `window.parent`. Every `postMessage` targets `window.location.origin` and never `"*"`. Selections are still re-resolved by the server (D6), so a forged frame message cannot select another store's element.
 - **Pending:**
   - M3 e2e (admin UI at 375 and 1440, real builds, screenshots);
   - full M0–M2 regression;

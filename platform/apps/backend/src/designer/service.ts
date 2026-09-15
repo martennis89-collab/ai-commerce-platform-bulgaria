@@ -240,7 +240,10 @@ export function merchantDesigner(ctx: ExecutionContext) {
           )
         const [merchantRow] = await insert(last + 1, "merchant", content, "completed", selected)
         const [assistantRow] = await insert(last + 2, "assistant", "", "queued", null)
-        await q(`UPDATE ai_designer_session SET last_message_at = now(), updated_at = now() WHERE id = ?`, [session.id])
+        await q(
+          `UPDATE ai_designer_session SET last_message_at = now(), updated_at = now() WHERE id = ? AND store_environment_id = ?`,
+          [session.id, env]
+        )
         return { merchant: merchantRow, assistant: assistantRow }
       })
 
@@ -270,12 +273,17 @@ export function merchantDesigner(ctx: ExecutionContext) {
           depends_on: [],
           max_attempts: limits.maxTaskAttempts,
         } as any)
-        await sqlRows(container, `UPDATE ai_designer_message SET run_id = ?, updated_at = now() WHERE id = ?`, [run.id, assistant.id])
+        await sqlRows(
+          container,
+          `UPDATE ai_designer_message SET run_id = ?, updated_at = now() WHERE id = ? AND store_environment_id = ?`,
+          [run.id, assistant.id, env]
+        )
       } catch (error) {
         await sqlRows(
           container,
-          `UPDATE ai_designer_message SET status = 'failed', error_code = 'internal', updated_at = now() WHERE id = ?`,
-          [assistant.id]
+          `UPDATE ai_designer_message SET status = 'failed', error_code = 'internal', updated_at = now()
+            WHERE id = ? AND store_environment_id = ?`,
+          [assistant.id, env]
         )
         throw error
       }

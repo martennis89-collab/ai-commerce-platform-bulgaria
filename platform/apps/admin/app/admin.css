@@ -25,6 +25,11 @@ body {
   outline-offset: 2px;
 }
 
+/* Views toggled with the `hidden` attribute must stay hidden even when a component sets `display`. */
+.amb-admin [hidden] {
+  display: none !important;
+}
+
 .amb-admin button,
 .amb-admin input,
 .amb-admin textarea {
@@ -662,8 +667,21 @@ body {
   .amb-admin .drawer {
     width: 100%;
   }
+  /* Phones: top bar, the Магазин/Разговор tabs in their own row, then the active view fills the rest. */
+  .amb-admin .designer {
+    grid-template-rows: 56px auto minmax(0, 1fr);
+  }
   .amb-admin .mobile-tabs {
     grid-column: 1 / -1;
+    align-self: start;
+  }
+  .amb-admin .canvas,
+  .amb-admin .rail {
+    grid-row: 3;
+    grid-column: 1 / -1;
+  }
+  .amb-admin .rail {
+    position: static;
   }
   .amb-admin .designer.has-sticky .canvas {
     padding-bottom: 76px;
