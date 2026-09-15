@@ -85,7 +85,7 @@ export type Offers = z.infer<typeof OffersSchema>
 
 /**
  * Follow-ups may change the brand, the home page copy and offer suggestions.
- * Product drafts are merchant-edited (M3); such requests route to `unsupported`.
+ * Product drafts are edited in the real catalogue milestone (M4); such requests route to `unsupported`.
  */
 export const FOLLOW_UP_TARGETS = ["brand", "storefront", "offers", "unsupported"] as const
 

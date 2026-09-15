@@ -202,21 +202,39 @@ const designer: TaskImplementation = async (rt) => {
     [env]
   )
   await rt.step("Работя по промяната", 30)
-  const plan = await rt.model({
-    purpose: "generation",
-    operation: "designer.plan",
-    schema: DesignerPlanSchema,
-    input: {
-      message: turn.content,
-      selected_element: selected,
-      selection_no_longer_exists: Boolean(turn.selected_element_id && !selected),
-      store_name: config.store.name,
-      theme: config.theme,
-      sections: config.home.sections,
-      media,
-    },
-    task: "Plan the storefront change the merchant asked for.",
-  })
+  // A retried turn reuses the plan of its first attempt: tool calls replay by operation index,
+  // so a fresh plan could otherwise silently skip a different operation at the same index.
+  const [stored] = await sqlRows(
+    container,
+    `SELECT result FROM ai_designer_message WHERE id = ? AND store_environment_id = ?`,
+    [turn.assistant_message_id, env]
+  )
+  const storedPlan = DesignerPlanSchema.safeParse(stored?.result?.plan)
+  const plan = storedPlan.success
+    ? storedPlan.data
+    : await rt.model({
+        purpose: "generation",
+        operation: "designer.plan",
+        schema: DesignerPlanSchema,
+        input: {
+          message: turn.content,
+          selected_element: selected,
+          selection_no_longer_exists: Boolean(turn.selected_element_id && !selected),
+          store_name: config.store.name,
+          theme: config.theme,
+          sections: config.home.sections,
+          media,
+        },
+        task: "Plan the storefront change the merchant asked for.",
+      })
+  if (!storedPlan.success) {
+    await sqlRows(
+      container,
+      `UPDATE ai_designer_message SET result = jsonb_build_object('plan', ?::jsonb), updated_at = now()
+        WHERE id = ? AND store_environment_id = ?`,
+      [JSON.stringify(plan), turn.assistant_message_id, env]
+    )
+  }
   const changes: Record<string, unknown>[] = []
   for (const [i, operation] of plan.operations.entries()) {
     await rt.step(`Прилагам промяна ${i + 1} от ${plan.operations.length}`, 40 + Math.round((50 * i) / plan.operations.length))

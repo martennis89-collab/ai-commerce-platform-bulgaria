@@ -239,6 +239,28 @@ medusaIntegrationTestRunner({
         const calls = fakeRegistry().calls.length
         expect(await drainTasks(getContainer(), { budgetMs: 3_000 })).toBe(0)
         expect(fakeRegistry().calls.length).toBe(calls)
+
+        // A retried turn reuses the plan its first attempt stored: no new model call, same operations.
+        const planCalls = () => fakeRegistry().calls.filter((c) => c.operation === "designer.plan").length
+        const planCallsBefore = planCalls()
+        setFakeOverride("designer.plan", () => {
+          throw new Error("a retried turn must not ask the model for a new plan")
+        })
+        const retried = await send(maria, "Компактни продукти")
+        expect(retried.status).toBe(202)
+        await sql(`UPDATE ai_designer_message SET result = ?::jsonb WHERE id = ?`, [
+          JSON.stringify({
+            plan: {
+              reply: "Из запазения план.",
+              operations: [{ op: "section.set_variant", args: { section_id: "product_grid-1", variant: "compact" } }],
+            },
+          }),
+          retried.data.assistant_message.id,
+        ])
+        const replayedTurn = await settleTurn(maria)
+        expect(replayedTurn).toMatchObject({ status: "completed", content: "Из запазения план." })
+        expect(findSection((await state(maria)).head.config, "product_grid")!.variant).toBe("compact")
+        expect(planCalls()).toBe(planCallsBefore)
       })
 
       it("M3-T04 designer changes are typed, audited, idempotent tool calls; invalid output changes nothing", async () => {
@@ -395,15 +417,34 @@ medusaIntegrationTestRunner({
         const ready = await waitForDeployment(promoted.data.deployment.id)
         expect(ready.status).toBe("ready")
         expect(ready.manifest).toMatchObject({ manifest_version: 2, revision_id: edited.head.id, target: "preview" })
-        expect(findSection(ready.manifest.config, "hero").headline).toBe("Нова витрина")
+        expect(findSection(ready.manifest.config, "hero")!.headline).toBe("Нова витрина")
         const afterPromotion = await state(maria)
         expect(afterPromotion.preview_revision_id).toBe(edited.head.id)
         expect((await sql(`SELECT state FROM storefront_revision WHERE id = ?`, [edited.head.id]))[0].state).toBe("preview")
 
         // Out-of-order completion: the newer request (higher sequence) wins even if the older one finishes last.
+        // Rows are created without the queued event, so the in-process subscriber cannot run them first.
         const container = getContainer()
-        const older = await requestPreviewDeployment(container, maria.envId, { revisionId: afterPromotion.revisions.at(-1).id })
-        const newer = await requestPreviewDeployment(container, maria.envId, {})
+        const [project] = await storefront().listStorefrontProjects({ id: maria.projectId })
+        const queue = async (revisionId: string) => {
+          const [{ deployment_sequence }] = await sql(
+            `UPDATE storefront_project SET deployment_sequence = deployment_sequence + 1 WHERE id = ? RETURNING deployment_sequence`,
+            [maria.projectId]
+          )
+          return storefront().createDeployments({
+            project_id: maria.projectId,
+            store_environment_id: maria.envId,
+            target: "preview",
+            status: "queued",
+            provider: "dry-run",
+            core_version: project.core_version,
+            hostname: project.preview_hostname,
+            sequence: deployment_sequence,
+            revision_id: revisionId,
+          })
+        }
+        const older = await queue(afterPromotion.revisions.at(-1).id)
+        const newer = await queue(afterPromotion.head.id)
         expect(newer.sequence).toBeGreaterThan(older.sequence)
         await executeDeployment(container, newer.id)
         await executeDeployment(container, older.id)

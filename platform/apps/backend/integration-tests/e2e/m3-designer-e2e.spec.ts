@@ -19,6 +19,7 @@ import path from "path"
 import { medusaIntegrationTestRunner } from "@medusajs/test-utils"
 import { WORKSPACE_ROOT } from "@platform/storefront-core"
 import { findSection } from "@platform/storefront-schema"
+import { createSharedRegion } from "../fixtures/commerce"
 import { bearer, call, createUserWithToken } from "../fixtures/http"
 import { STOREFRONT_MODULE } from "../../src/modules/storefront"
 import { TENANCY_MODULE } from "../../src/modules/tenancy"
@@ -39,6 +40,10 @@ const PASSWORD = "M0-test-password!"
 const EVIDENCE_DIR = process.env.M3_UI_EVIDENCE_DIR || path.join(os.tmpdir(), "m3-ui-evidence")
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)])
 const ENGLISH_UI = /\b(Send|Undo|History|Loading|Preview|Error|Submit|Cancel|Retry|Settings|Dashboard)\b/
+
+// The runner loads medusa-config before it applies `env`, so config-time CORS must be set up front.
+process.env.AUTH_CORS = ADMIN_ORIGIN
+process.env.MERCHANT_CORS = ADMIN_ORIGIN
 
 medusaIntegrationTestRunner({
   env: {
@@ -117,20 +122,34 @@ medusaIntegrationTestRunner({
     }
 
     const signIn = async (page: any, store: Store) => {
-      await page.goto(`${ADMIN_ORIGIN}/`)
-      await page.getByLabel("Имейл").fill(store.email)
-      await page.getByLabel("Парола").fill(PASSWORD)
-      await page.getByRole("button", { name: "Вход" }).click()
-      await page.locator('iframe[title="Чернова на магазина"]').waitFor({ timeout: 60_000 })
-      const frame = page.frameLocator('iframe[title="Чернова на магазина"]')
-      await frame.locator('[data-amb-element="section:hero-1/headline"]').waitFor({ timeout: 60_000 })
-      return frame
+      // Browser-side problems are collected so a failed sign-in explains itself instead of timing out silently.
+      const problems: string[] = []
+      page.on("console", (m: any) => m.type() === "error" && problems.push(`console: ${m.text()}`))
+      page.on("pageerror", (e: any) => problems.push(`pageerror: ${e.message}`))
+      page.on("requestfailed", (r: any) => problems.push(`requestfailed: ${r.method()} ${r.url()} ${r.failure()?.errorText}`))
+      page.on("response", (r: any) => r.status() >= 400 && problems.push(`http ${r.status()}: ${r.request().method()} ${r.url()}`))
+      try {
+        await page.goto(`${ADMIN_ORIGIN}/`)
+        await page.getByLabel("Имейл").fill(store.email)
+        await page.getByLabel("Парола").fill(PASSWORD)
+        await page.getByRole("button", { name: "Вход" }).click()
+        await page.locator('iframe[title="Чернова на магазина"]').waitFor({ timeout: 60_000 })
+        const frame = page.frameLocator('iframe[title="Чернова на магазина"]')
+        await frame.locator('[data-amb-element="section:hero-1/headline"]').waitFor({ timeout: 60_000 })
+        return frame
+      } catch (error: any) {
+        await evidence(page, `signin-failure-${store.handle}`).catch(() => undefined)
+        const body = await page.locator("body").innerText().catch(() => "")
+        throw new Error(`sign-in failed: ${error.message}\nbody: ${body.slice(0, 500)}\n${problems.join("\n")}`)
+      }
     }
 
     beforeAll(async () => {
       fs.rmSync(DEPLOY_ROOT, { recursive: true, force: true })
       process.env.STOREFRONT_BACKEND_URL = String(api.defaults.baseURL).replace(/\/$/, "")
       const container = getContainer()
+      // Storefront builds read calculated prices, which Medusa only serves with a region.
+      await createSharedRegion(container)
       const operator = await createUserWithToken(container, api, "operator@platform.test")
       await registerPlatformOperator(container, operator.user.id)
 
@@ -144,7 +163,8 @@ medusaIntegrationTestRunner({
         store.envId = res.data.store_environment.id
         store.projectId = res.data.storefront_project.id
         store.token = owner.token
-        expect((await waitDeployment(res.data.deployment.id)).status).toBe("ready")
+        const firstBuild = await waitDeployment(res.data.deployment.id)
+        expect({ status: firstBuild.status, error: firstBuild.error }).toMatchObject({ status: "ready" })
         await api.post("/merchant/media", { filename: "photo.png", mime_type: "image/png", content_base64: PNG.toString("base64") }, bearer(owner.token))
         store.sessionId = (await api.post("/merchant/designer/sessions", {}, bearer(owner.token))).data.session.id
       }
@@ -188,7 +208,7 @@ medusaIntegrationTestRunner({
       await browser?.close().catch(() => undefined)
       admin?.kill()
       if (gateway) await new Promise<void>((r) => gateway.close(() => r()))
-      fs.rmSync(DEPLOY_ROOT, { recursive: true, force: true })
+      // The deploy root is kept (git-ignored) so build logs survive a failure; beforeAll cleans it on the next run.
     })
 
     it("M3-T13 framing is refused everywhere except the admin's own draft frame", async () => {

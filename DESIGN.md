@@ -1,6 +1,6 @@
 # Amboras Design
 
-Status: **DRAFT for user approval (M3 decision D16).** No UI implementation starts until this document is approved. After approval, it is the design contract for:
+Status: **APPROVED by the user on 2026-09-15 (M3 decision D16).** It is the canonical design contract for:
 
 - **the Amboras merchant admin**, starting with the M3 designer in `apps/admin`;
 - **the merchant storefront design space**: what a merchant or the AI may change in a storefront through `storefront-schema` v3.

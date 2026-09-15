@@ -36,7 +36,41 @@
 7. **Wrap-up.** Docs (STOREFRONT, AI_EXECUTION, TENANCY §12, ARCHITECTURE, DECISIONS ADR-021), then reviews (tenant isolation, security red-team, durable agent), push, draft PR.
 
 ## Progress log
-- **Phase 0.** Playwright `^1.63.0` added to `@platform/backend` devDependencies (D7). Chromium download and launch smoke: see the next entry.
+- **Phase 0.** Playwright `^1.63.0` added to `@platform/backend` devDependencies (D7). Chrome Headless Shell 153.0.8010.12 downloaded; headless screenshot smoke passed. No stop condition.
+- **Phases 1–5 implemented; checkpoint commit `521c7cc`:**
+  - storefront-schema v3 and storefront-core 0.3.0: shared renderer, manifest v2, bridge;
+  - revisions, deployment sequence, gateway hardening and rate limits;
+  - designer sessions, turns, tools, undo/restore, promotion, Playwright screenshots, merchant API with SSE and CORS;
+  - `apps/admin` (next build passes).
+  - Migrations: storefront `Migration20260915112327`, ai `Migration20260915112158`.
+- **Environment note.** Docker Desktop had stopped mid-mission (ECONNREFUSED on 55432). It was restarted, `m0-medusa-postgres` was started, and migrations were regenerated.
+- **Results so far:**
+  - Unit: 218/218.
+  - M3 integration (`m3-designer.spec.ts`): 12/12.
+  - Backend and test typecheck: clean.
+  - The M3-T07 first failure was a test race with the in-process deployment subscriber, fixed in the test.
+- **D10.** The "product drafts are merchant-edited (M3)" wording now says M4 in `docs/AI_EXECUTION.md` and `src/ai/schemas.ts`.
+- **Docs:**
+  - STOREFRONT.md rewritten for M3;
+  - AI_EXECUTION.md designer turns section;
+  - TENANCY.md §12 M3 invariants;
+  - ARCHITECTURE.md M3 section;
+  - DECISIONS ADR-021 (admin stack) and ADR-022 (M3 designer);
+  - DESIGN.md marked approved.
+- **After checkpoint (uncommitted):**
+  - **Durable-agent fix.** A retried designer turn reuses the plan its first attempt stored on the assistant message (`result.plan`). A fresh plan could otherwise skip or misapply a change, because tool calls replay by operation index. The terminal settle replaces `result` with `{changes}`, and the merchant API exposes only `changes`. Covered in M3-T03.
+  - **M3 e2e: first diagnosis.** Every preview build failed with "Missing required pricing context … region_id". The spec lacked `createSharedRegion`, which M1 and M2 e2e already use; test fixture only.
+  - **M3 e2e: second diagnosis.** Admin sign-in was blocked by CORS on `/auth/user/emailpass`. `medusaIntegrationTestRunner` loads `medusa-config` before it applies `env`, so the spec now sets `AUTH_CORS`/`MERCHANT_CORS` at module scope.
+  - **Local dev CORS.** The same gap affected local development: the `authCors` default did not include the admin dev origin. `medusa-config.ts` now defaults to `http://localhost:9000,http://localhost:7001`, and STOREFRONT.md documents that `AUTH_CORS` must list the admin origin.
+  - **Sign-in diagnostics.** A failing sign-in in the e2e now records console errors, failed requests, the page text and a screenshot.
+  - **Live smoke spec.** Added the opt-in M3-T16 spec `integration-tests/live/m3-designer-smoke.spec.ts`. It skips without a key and has not been run.
+  - **Latest results:** unit 218/218; M3 integration 12/12; typecheck clean.
+- **Pending:**
+  - M3 e2e (admin UI at 375 and 1440, real builds, screenshots);
+  - full M0–M2 regression;
+  - reviews (tenant-isolation-review, security-red-team, durable-agent-review);
+  - push and draft PR.
+  - Live smoke M3-T16 stays pending until the key is rotated.
 
 ## Previous status
 **DESIGN.md DRAFTED, AWAITING USER APPROVAL (D16). No UI or product code yet.** Approved 2026-09-15.

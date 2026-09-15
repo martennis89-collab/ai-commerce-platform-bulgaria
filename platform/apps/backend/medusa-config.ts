@@ -8,7 +8,8 @@ module.exports = defineConfig({
     http: {
       storeCors: process.env.STORE_CORS || "http://localhost:8000",
       adminCors: process.env.ADMIN_CORS || "http://localhost:9000",
-      authCors: process.env.AUTH_CORS || "http://localhost:9000",
+      // The Amboras admin (apps/admin, port 7001 in development) signs in through /auth from its own origin.
+      authCors: process.env.AUTH_CORS || "http://localhost:9000,http://localhost:7001",
       jwtSecret: process.env.JWT_SECRET || "supersecret",
       cookieSecret: process.env.COOKIE_SECRET || "supersecret",
       // Guest checkout only: Medusa customer identities are global across stores.
