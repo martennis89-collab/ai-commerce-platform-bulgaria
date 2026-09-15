@@ -25,6 +25,11 @@ export class Migration20260915112327 extends Migration {
 
     this.addSql(`alter table if exists "storefront_deployment" add column if not exists "sequence" integer null, add column if not exists "revision_id" text null, add column if not exists "requested_by" text null;`);
     this.addSql(`CREATE INDEX IF NOT EXISTS "IDX_storefront_deployment_project_id_target_sequence" ON "storefront_deployment" ("project_id", "target", "sequence") WHERE deleted_at IS NULL;`);
+
+    // D11 backfill: existing deployments get a per-project sequence in creation order, and each
+    // project's counter continues after them, so ordering never depends on NULL sequences.
+    this.addSql(`UPDATE "storefront_deployment" d SET "sequence" = s.rn FROM (SELECT id, row_number() OVER (PARTITION BY project_id ORDER BY created_at, id) AS rn FROM "storefront_deployment" WHERE "sequence" IS NULL) s WHERE d.id = s.id;`);
+    this.addSql(`UPDATE "storefront_project" p SET "deployment_sequence" = coalesce((SELECT max(d."sequence") FROM "storefront_deployment" d WHERE d.project_id = p.id), 0);`);
   }
 
   override async down(): Promise<void> {

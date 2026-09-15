@@ -1,7 +1,7 @@
 # M3 — Contextual AI store designer — STATE
 
 ## Status
-**IMPLEMENTING (2026-09-15).** The user approved `DESIGN.md` and started implementation. `DESIGN.md` is canonical for M3 UI and schema choices. Model `claude-opus-5`, reasoning `high`.
+**IMPLEMENTED, TESTS PASS, DRAFT PR (2026-09-15).** M3-T01–T15 and T17 pass. M3-T16 (live designer smoke) is pending until the Anthropic key is rotated or the user waives it. Do not merge, tag or start M4. The user approved `DESIGN.md` and started implementation. `DESIGN.md` is canonical for M3 UI and schema choices. Model `claude-opus-5`, reasoning `high`.
 
 ## Implementation plan (phases, checkpoint-committed on this branch)
 1. **Schema and renderer.**
@@ -85,12 +85,19 @@
     - The screenshot thumbnail appears broken in e2e only. Medusa's local file provider defaults file URLs to `http://localhost:9000/static`, while the test backend runs on a random port. The stored PNG itself is verified (size, ownership), and on a backend at port 9000 the image loads.
   - **Test isolation.** M3-T08 asserted a headline set by the desktop test, but the runner restores the database before each test. It now asserts that screenshots leave the draft unchanged: same head revision and headline before and after.
   - **Security (preview bridge).** Both directions of the admin bridge check the exact admin origin and exact source window: `Designer` accepts only the iframe's `contentWindow`, and `DraftFrame` only `window.parent`. Every `postMessage` targets `window.location.origin` and never `"*"`. Selections are still re-resolved by the server (D6), so a forged frame message cannot select another store's element.
-- **Pending:**
-  - M3 e2e (admin UI at 375 and 1440, real builds, screenshots);
-  - full M0–M2 regression;
-  - reviews (tenant-isolation-review, security-red-team, durable-agent-review);
-  - push and draft PR.
-  - Live smoke M3-T16 stays pending until the key is rotated.
+- **Full regression, run 1 (after commit `9d704a3`).** Passing: typecheck, unit 218/218, integration M0 and M3, e2e 9/9 (M1, M2, M3), baseline 6/6. Six M1/M2 integration tests failed on behaviour that M3 changed by approval. Each test was updated and its invariant kept:
+  - **M2-T01:** expected `core_version` 0.2.0; now 0.3.0 (storefront-core bump).
+  - **M1-T04:** exact manifest keys; manifest v2 adds `media` (asserted `{}`) and `revision_id` (null or a srev id). The foreign-key and foreign-id scans are unchanged.
+  - **M1-N3 and M2-T14:** rows were created without a `sequence`, so they ranked below the sequenced initial deployment (D11 `sequence DESC NULLS LAST`). The tests now allocate sequences the way `requestPreviewDeployment` does. The older-never-replaces-newer and stale-lease invariants are unchanged.
+  - **M1-R1:** the gateway now serves only `builds/<deployment_id>/out` (D11), and dry-run records `dry-run/<id>`. The test places its artifact at the exact path.
+  - **M1-T03c config injection (security):** builds now read the head revision's config, and `project.config` is only its mirror. The test tampers both after the head exists, and the deployment still fails closed with a config error, no artifact and no manifest.
+  - **Migration `Migration20260915112327`:** now backfills legacy deployment sequences per project in creation order and sets `project.deployment_sequence` to the maximum. Note: a local development database that already applied the earlier version of this unmerged migration does not rerun it.
+  - The baseline run rewrote `baseline-observations.json` with new generated ids only; it was restored with git.
+- **Full regression, run 2 (after the test updates and migration backfill).** Integration: 4 suites, 90/90 (M0, M1, M2, M3). Together with run 1: typecheck clean, unit 218/218, e2e 9/9, baseline 6/6. The e2e and baseline runs came before the backfill was added. They migrate empty databases, where the backfill is a no-op.
+- **Reviews done inline:** durable agent, tenant isolation, security (preview bridge), UI evidence. Findings and fixes are listed above.
+- **Remaining:**
+  - Push `mission/m3-contextual-designer` and open a draft PR into `main`. No merge, no tag, no M4.
+  - Live smoke M3-T16: pending until the Anthropic key is rotated, unless the user waives it. It is the only open acceptance item.
 
 ## Previous status
 **DESIGN.md DRAFTED, AWAITING USER APPROVAL (D16). No UI or product code yet.** Approved 2026-09-15.

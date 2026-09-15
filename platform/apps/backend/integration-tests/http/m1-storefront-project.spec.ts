@@ -19,6 +19,8 @@ import os from "os"
 import path from "path"
 import { resolvePreviewRoute, startPreviewGateway } from "../../src/storefront/deploy/gateway"
 import { executeDeployment } from "../../src/storefront/deployments"
+import { sqlRows } from "../../src/ai/sql"
+import { ensureHeadRevision } from "../../src/storefront/revisions"
 import { provisionStoreEnvironment } from "../../src/tenancy/provisioning"
 
 jest.setTimeout(10 * 60 * 1000)
@@ -178,9 +180,12 @@ medusaIntegrationTestRunner({
         const mariaKey = await keyOf(project.publishable_api_key_id)
         const petyaKey = await keyOf((await projectOf(petya)).publishable_api_key_id)
         const m = deployment.manifest
+        // Manifest v2 (M3) adds the built revision and the server-resolved owned media map.
         expect(Object.keys(m).sort()).toEqual(
-          ["backend_url", "config", "core_version", "deployment_id", "hostname", "manifest_version", "project_id", "publishable_key", "store_handle", "target"].sort()
+          ["backend_url", "config", "core_version", "deployment_id", "hostname", "manifest_version", "media", "project_id", "publishable_key", "revision_id", "store_handle", "target"].sort()
         )
+        expect(m.media).toEqual({})
+        expect(m.revision_id === null || /^srev_[0-9A-Z]{26}$/.test(m.revision_id)).toBe(true)
         expect(m).toMatchObject({
           deployment_id: deployment.id,
           project_id: maria.projectId,
@@ -255,7 +260,13 @@ medusaIntegrationTestRunner({
             [Modules.SALES_CHANNEL]: { sales_channel_id: petyaChannel },
           })
         } else if (attack === "config-injection") {
+          // Since M3 builds use the head revision's config (project.config is its mirror): tamper both.
+          const head = await ensureHeadRevision(container, project.id, maria.envId)
           await storefront().updateStorefrontProjects({ id: project.id, config: { ...project.config, store_environment_id: petya.envId } })
+          await sqlRows(container, `UPDATE storefront_revision SET config = ?::jsonb WHERE id = ?`, [
+            JSON.stringify({ ...head.config, store_environment_id: petya.envId }),
+            head.id,
+          ])
         } else {
           await storefront().updateStorefrontProjects({ id: project.id, core_version: "9.9.9" })
         }
@@ -337,9 +348,12 @@ medusaIntegrationTestRunner({
       it("M1-R1 the runnable gateway entry point serves a ready deployment resolved from the database", async () => {
         const container = getContainer()
         const [ready] = await storefront().listDeployments({ project_id: maria.projectId, status: "ready" })
+        // Since M3 (D11) the gateway serves only builds/<deployment_id>/out; dry-run deployments record no such artifact.
+        const artifactRef = `builds/${ready.id}/out`
+        await storefront().updateDeployments({ id: ready.id, artifact_ref: artifactRef })
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "m1-r1-"))
-        fs.mkdirSync(path.join(root, ready.artifact_ref), { recursive: true })
-        fs.writeFileSync(path.join(root, ready.artifact_ref, "index.html"), "<h1>Maria Candles preview</h1>")
+        fs.mkdirSync(path.join(root, artifactRef), { recursive: true })
+        fs.writeFileSync(path.join(root, artifactRef, "index.html"), "<h1>Maria Candles preview</h1>")
         const server = await startPreviewGateway(container, { port: 0, host: "127.0.0.1", deployRoot: root })
         try {
           const port = (server.address() as any).port
@@ -390,8 +404,14 @@ medusaIntegrationTestRunner({
       it("M1-N3 an older deployment that finishes later never replaces a newer ready one", async () => {
         const container = getContainer()
         const project = await projectOf(maria)
-        const row = () =>
-          storefront().createDeployments({
+        // Since M3 (D11) "newer" means a higher per-project sequence, allocated like requestPreviewDeployment does.
+        const row = async () => {
+          const [{ deployment_sequence }] = await sqlRows(
+            container,
+            `UPDATE storefront_project SET deployment_sequence = deployment_sequence + 1 WHERE id = ? RETURNING deployment_sequence`,
+            [project.id]
+          )
+          return storefront().createDeployments({
             project_id: project.id,
             store_environment_id: maria.envId,
             target: "preview",
@@ -399,7 +419,9 @@ medusaIntegrationTestRunner({
             provider: "dry-run",
             core_version: STOREFRONT_CORE_VERSION,
             hostname: project.preview_hostname,
+            sequence: deployment_sequence,
           })
+        }
         const older = await row()
         const newer = await row()
         expect(newer.id > older.id).toBe(true)

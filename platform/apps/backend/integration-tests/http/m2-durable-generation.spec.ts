@@ -296,7 +296,7 @@ medusaIntegrationTestRunner({
         expect(findSection(config, "hero")!.headline).toBe("Sofia Candles")
         expect(findSection(config, "about")!.body).toBe(DESCRIPTION)
         const [project] = await storefront().listStorefrontProjects({ id: store.projectId })
-        expect(project.core_version).toBe("0.2.0")
+        expect(project.core_version).toBe("0.3.0")
 
         const deployments = (await storefront().listDeployments({ project_id: store.projectId }, { take: null })) as any[]
         const aiDeployments = deployments.filter((d) => d.request_key)
@@ -702,6 +702,16 @@ medusaIntegrationTestRunner({
         expect(again.id).toBe(first.id)
         await waitForDeployment(first.id)
 
+        // Since M3 (D11) deployments are ordered by a per-project sequence, allocated like requestPreviewDeployment does.
+        const nextSequence = async () =>
+          (
+            await sqlRows(
+              container,
+              `UPDATE storefront_project SET deployment_sequence = deployment_sequence + 1 WHERE id = ? RETURNING deployment_sequence`,
+              [petya.projectId]
+            )
+          )[0].deployment_sequence
+
         // A build whose worker died: status building with an expired lease.
         const crashed = await storefront().createDeployments({
           project_id: petya.projectId,
@@ -709,8 +719,9 @@ medusaIntegrationTestRunner({
           target: "preview",
           status: "queued",
           provider: "dry-run",
-          core_version: "0.2.0",
+          core_version: "0.3.0",
           hostname: "petya-jewellery.preview.shops.test",
+          sequence: await nextSequence(),
         })
         await sql(
           `UPDATE storefront_deployment SET status = 'building', lease_owner = 'dead', lease_token = 'dead-token', lease_expires_at = now() + interval '1 hour', attempts = 1 WHERE id = ?`,
@@ -731,8 +742,9 @@ medusaIntegrationTestRunner({
           target: "preview",
           status: "queued",
           provider: "dry-run",
-          core_version: "0.2.0",
+          core_version: "0.3.0",
           hostname: "petya-jewellery.preview.shops.test",
+          sequence: await nextSequence(),
         })
         const staleHolder = await claimDeployment(container, "stale-worker", late.id)
         expect(staleHolder).toMatchObject({ id: late.id, status: "building" })
