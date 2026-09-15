@@ -1,0 +1,25 @@
+{
+  "mission": "m3-contextual-designer",
+  "status": "DESIGN_DRAFT_AWAITING_APPROVAL",
+  "regression_gate": "M0, M1 and M2 suites (unit, integration, baseline, e2e) must stay green",
+  "provider_policy": "Deterministic suites use the fake model provider. The live designer smoke (M3-T16) is required before final acceptance unless explicitly waived by the user (D13); it is pending until the Anthropic key is rotated.",
+  "tests": [
+    { "id": "M3-T01", "requirement": "Selecting an element in the preview: the next designer turn receives that selection through the server-built ExecutionContext, re-resolved against the caller's own current draft (D6)", "status": "NOT_STARTED" },
+    { "id": "M3-T02", "requirement": "Forged, foreign, stale or malformed element ids are rejected; the turn runs without selection or fails closed", "status": "NOT_STARTED" },
+    { "id": "M3-T03", "requirement": "Designer sessions and messages persist across refresh and worker process kill/restart, are StoreEnvironment-owned, and execute through the M2 lease/tool gate (D5)", "status": "NOT_STARTED" },
+    { "id": "M3-T04", "requirement": "Every designer edit is a typed, audited, idempotent risk-0 tool call creating a new draft revision; invalid, extra-field or low-contrast output is rejected with no side effects (D12)", "status": "NOT_STARTED" },
+    { "id": "M3-T05", "requirement": "Revisions are immutable and append-only with a monotonic per-project sequence; concurrent edits on the same parent: one wins, one gets a conflict", "status": "NOT_STARTED" },
+    { "id": "M3-T06", "requirement": "Undo/restore to revision N creates a new revision equal to N and cancels in-flight designer turns for the project; a stale AI write cannot overwrite it (D8)", "status": "NOT_STARTED" },
+    { "id": "M3-T07", "requirement": "Authenticated in-admin draft rendering reflects an edit quickly; promotion (risk 1) produces a real per-project preview build rendering the edited sections (D1, D9)", "status": "NOT_STARTED" },
+    { "id": "M3-T08", "requirement": "Playwright/Chromium screenshot captured only from the server-derived preview URL, stored as tenant-owned media, recorded against the revision (D7)", "status": "NOT_STARTED" },
+    { "id": "M3-T09", "requirement": "Draft and preview content never appear on live hostnames or another store's preview; nothing goes live (D9)", "status": "NOT_STARTED" },
+    { "id": "M3-T10", "requirement": "Cross-tenant session, message, revision, screenshot, project and run ids return 404 on every new route and stream", "status": "NOT_STARTED" },
+    { "id": "M3-T11", "requirement": "Prompt injection in merchant copy, storefront content or selected-element text cannot select a tenant, reach catalogue tools, set prices or stock, publish live, or emit HTML/CSS/JS", "status": "NOT_STARTED" },
+    { "id": "M3-T12", "requirement": "Schema v3 rejects unknown keys/sections, more than two variants, non-owned or URL media, javascript:/data: URLs; v2 upgrades to v3 losslessly (D4)", "status": "NOT_STARTED" },
+    { "id": "M3-T13", "requirement": "Preview bridge postMessage accepts only the exact expected origins; preview frames only for the admin origin (CSP frame-ancestors); admin is not frameable", "status": "NOT_STARTED" },
+    { "id": "M3-T14", "requirement": "Per-store edit, designer turn, redeploy and screenshot rate limits enforced; monotonic deployment sequence settles newest preview; artifact path hardened to builds/<deployment_id>/out (D11)", "status": "NOT_STARTED" },
+    { "id": "M3-T15", "requirement": "Designer UI meets DESIGN.md §6: Bulgarian copy, 375px and 1440px, keyboard and focus, contrast, reduced motion, all §3.5 states; verified in a real browser", "status": "NOT_STARTED" },
+    { "id": "M3-T16", "requirement": "Opt-in live designer smoke: a real model applies a Bulgarian copy and theme edit to a selected element end to end", "status": "PENDING_CREDENTIALS_KEY_ROTATION" },
+    { "id": "M3-T17", "requirement": "M0, M1 and M2 regression suites pass (unit, integration, baseline, e2e)", "status": "NOT_STARTED" }
+  ]
+}

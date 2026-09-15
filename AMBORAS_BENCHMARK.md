@@ -1,6 +1,10 @@
 # Amboras Benchmark
 
-Amboras is the primary product and UX benchmark, not an authority for unverified internals.
+Amboras is the product brand of this platform (user decision M3-D15, 2026-09-15). This document records the product and UX principles the Amboras experience must deliver.
+
+Some of these principles were first observed in external reference products. That origin is evidence of user benefit only: it is not an authority for the internals of any external product, and internals must not be copied from it.
+
+Naming note: `SCOPE_LEVEL_1_LOCKED.md` ("Amboras-like experience") and the "Amboras rule" in `PROJECT_INSTRUCTIONS.md` were written when Amboras was treated as an external benchmark. Those documents are unchanged. Read them as referring to the Amboras experience defined here; their product intent is not affected.
 
 ## Principles to reproduce
 
@@ -17,7 +21,7 @@ Amboras is the primary product and UX benchmark, not an authority for unverified
 - Infrastructure complexity is absorbed by the platform.
 - Storefront flexibility can progress from structured configuration to controlled source editing.
 
-## Our deliberate adaptations
+## Deliberate architecture choices
 
 - Use a server-established tenant context; never trust a browser tenant header as authentication.
 - Use a shared versioned storefront core with an independent project per merchant, avoiding uncontrolled repository sprawl.
@@ -27,4 +31,4 @@ Amboras is the primary product and UX benchmark, not an authority for unverified
 
 ## Evidence freshness
 
-Current Amboras behaviour, repository structure, model names, and external provider capabilities can change. Re-check current primary evidence before making a decision that depends on them. Never convert an observation into a locked fact without an explicit decision record.
+The behaviour of external reference products, model names, and external provider capabilities can change. Re-check current primary evidence before making a decision that depends on them. Never convert an observation into a locked fact without an explicit decision record.
