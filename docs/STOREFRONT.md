@@ -39,6 +39,10 @@ Revision 1 (author `system`) is created on first use from the project's config, 
 - **Optimistic concurrency.** The caller names the parent it edited. If the head has moved, the commit fails with `RevisionConflictError` (HTTP 409) and nothing is written.
 - **Idempotency.** A commit with an `action_key` that already created a revision returns that revision. A replayed AI tool call never adds a second one.
 - **Undo and restore** are ordinary commits whose config copies an earlier revision (`restored_from_revision_id`). History is never rewritten.
+- **A restore always wins against an in-flight designer turn (D8).** Restore and undo cancel the store's designer turns inside their own commit, while holding the project row lock. A designer AI commit re-checks cancellation and its task lease under the same lock, immediately before inserting. Whichever takes the lock first:
+  - the AI edit is refused because its run is already cancelled; or
+  - it landed first, and the restore supersedes AI revisions of the turns it cancels instead of failing with 409.
+- **A restore that loses to anything else is still a 409.** Examples are a merchant edit or a turn that already completed; that case cancels nothing.
 
 ## 4. Deployment manifest
 
@@ -143,6 +147,11 @@ npm run preview:gateway     # serves ready previews on http://<handle>.preview.l
 - **Turns.** `POST /merchant/designer/sessions/:id/messages` creates a merchant message, a queued assistant message and one `designer_edit` AgentRun. See `docs/AI_EXECUTION.md`.
 - **Promotion (M3-D9).** `POST /merchant/designer/promote` requests a real per-project preview deployment of the head, or a named revision (risk 1). Nothing goes live.
 - **Screenshots (M3-D7).** `POST /merchant/designer/screenshots` uses Playwright Chromium.
+  - **Bounded capture.** A capture runs inside the request, so it is limited three ways:
+    - a per-process browser cap (`STOREFRONT_SCREENSHOT_CONCURRENCY`, 1 or 2, default 1);
+    - one capture per store across processes (a transaction advisory lock);
+    - a deadline that closes the browser (`STOREFRONT_SCREENSHOT_TIMEOUT_MS`, default 60 s).
+  - **Busy is 429.** A request that finds the cap or the store lock taken gets `429` with `reason: "busy"`, and is not queued. The slot and the lock are released after success, failure and timeout.
   - The page origin is the preview hostname, but every request for it is answered from `builds/<deployment_id>/out` on disk.
   - Only GETs for the store's own media (`/static/<store_environment_id>/…`) may reach the network; everything else is aborted.
   - Media and screenshot URLs come from Medusa's file provider. The local provider defaults to `http://localhost:9000/static`, so a deployment must configure the provider's URL to its public backend origin. Test backends on random ports therefore show broken thumbnails, while the stored files are still verified.
@@ -157,7 +166,7 @@ npm run preview:gateway     # serves ready previews on http://<handle>.preview.l
 | Merchant | `POST /merchant/storefront/preview-deployments` | The body must be `{}`. Project, environment, key and target are all server-derived; tenant selectors get 400. Rate limited (429). |
 | Merchant (M3) | `GET /merchant/designer` | Head revision config, preview revision, revision summaries, owned media map, published products for draft rendering, preview deployments, screenshots, the active session. |
 | Merchant (M3) | `POST /merchant/designer/selection`, `…/sessions`, `GET …/sessions/:id`, `GET …/sessions/:id/events` (SSE), `POST …/sessions/:id/messages` | Designer conversation. Foreign ids return 404. |
-| Merchant (M3) | `POST /merchant/designer/undo`, `…/revisions/:id/restore`, `…/promote`, `…/screenshots` | Append-only undo/restore with `expected_head_revision_id` (409 on a stale head); preview promotion; screenshots. |
+| Merchant (M3) | `POST /merchant/designer/undo`, `…/revisions/:id/restore`, `…/promote`, `…/screenshots` | Append-only undo/restore with `expected_head_revision_id`: 409 on a stale head, except for AI revisions of turns the restore cancels. Preview promotion. Screenshots (429 `busy` while a capture for the store or the process cap is taken). |
 | Tool | `storefront.request_preview_deployment` (risk 1, `storefront:deploy`) | Takes no arguments. |
 | AI tool (M2) | `storefront.update_home`, `brand.apply` | Commit revisions against the head. |
 | AI tool (M3) | `theme.update_tokens`, `section.update_copy`, `section.reorder`, `section.set_variant`, `section.add`, `section.remove`, `section.attach_photo` (risk 0, `storefront:design`); `storefront.promote_preview` (risk 1, `storefront:deploy`) | One revision per call, idempotent by action key. Owned photos only. Rate limited. |
@@ -189,7 +198,8 @@ Hourly limits per store environment, counted from the audited rows themselves. E
 - **Build-time catalogue.** The catalogue is read at build time, so catalogue changes need a redeploy until M4/M5 add dynamic reads.
 - **Config coverage.** One home page with the fixed section library. Additional pages and controlled source editing are later milestones.
 - **Harness environment.** The dev-only harness (`apps/storefront`) passes the developer's whole environment to `next dev`. Merchant builds always use the local provider's allow-list.
-- **Rate limits are soft under exact concurrency.** Two requests at the boundary can both pass. Every counted action is still bounded and audited.
+- **Rate limits are soft under exact concurrency.** Two requests at the boundary can both pass. Every counted action is still bounded and audited, and screenshot captures are additionally capped and locked (§8).
+- **Undo and restore share the edit limit** (`DESIGNER_MAX_EDITS_PER_HOUR`) with AI edits. A store at the limit cannot undo until the window reopens. This is a known review note, not yet changed.
 - **Draft rendering uses published products only.** The in-admin draft shows the same catalogue the build would; product drafts are M4.
 - **Screenshots need a local build.** A `dry-run` deployment has no artifact to capture.
 - **Windows shutdown (review N-d).** Gateway shutdown on SIGINT/SIGTERM waits for keep-alive connections, and is untested on Windows.

@@ -73,7 +73,7 @@ The contextual designer reuses the same durable machinery. There is no parallel 
 - **One turn per message.** Sending a merchant message creates:
   - a queued assistant message;
   - one `designer_edit` AgentRun with a single `designer` task, limited to 2 model calls, 6 tool calls, 2 attempts and 5 minutes.
-- **One active turn per store.** A new message while a turn is queued or running gets `409 turn_in_progress`, under a per-store advisory lock.
+- **One active turn per store.** A new message while a live turn is queued or running gets `409 turn_in_progress`, under a per-store advisory lock. A message whose run is terminal, cancel-requested or missing never blocks.
 - **Execution** (`src/ai/tasks.ts` → `designer`):
   1. Re-read the head revision and re-resolve the selection against it (D6).
   2. Call `designer.plan` (Sonnet tier), which returns a strict `DesignerPlanSchema`: a Bulgarian reply plus at most four typed operations.
@@ -83,12 +83,24 @@ The contextual designer reuses the same durable machinery. There is no parallel 
   - Risk 0, permission `storefront:design`: `theme.update_tokens`, `section.update_copy`, `section.reorder`, `section.set_variant`, `section.add`, `section.remove`, `section.attach_photo`.
   - Each applies a pure bounded transform to the current head, re-validates with storefront-schema v3, checks that new photos are owned media, applies the edit rate limit, and commits one revision based on that head (`action_key` = idempotency key, `designer_message_id` = the assistant message).
   - `storefront.promote_preview` is risk 1, permission `storefront:deploy`.
-- **Settling.** The assistant message mirrors the task outcome (`completed` / `failed` with an error code / `cancelled`). Its listed changes are read back from the revisions it created, so even a failed turn reports what it changed before it stopped.
+- **Settling.** The assistant message mirrors the turn outcome (`completed` / `failed` with an error code / `cancelled`). Its listed changes are read back from the revisions it created, so even a failed turn reports what it changed before it stopped.
+  - **When it settles.** `settleDesignerTurn` (`src/designer/turns.ts`) is idempotent and runs on every path that can end a turn:
+    - the worker's `finally`;
+    - restore/undo cancellation;
+    - `sweepExpired`, for every run it recomputes, including deadline expiry and a lease that expires on the final attempt;
+    - `settleStrandedDesignerTurns`, a repair sweep run by the worker tick and before every new message.
+  - **Terminal runs.** A run that is terminal while its task is not settles as `cancelled` or `failed`.
+  - **Cancel-requested runs.** Their queued, waiting, paused or lease-expired tasks are closed as `cancelled`.
+  - **Orphans.** A message whose run was never created or no longer exists is failed after two minutes.
 - **Undo and restore** (D8):
   - Both are merchant commits of an earlier config.
-  - Both first call `cancelDesignerTurns`: queued tasks are cancelled, and running ones stop at their next checkpoint.
-  - A stale AI commit still fails the parent-revision check.
-  - `revision_conflict` is retryable for M2 tasks. A cancelled designer run is never retried.
+  - Both request cancellation of the store's designer turns inside their own commit, while holding the project row lock, so a rejected restore cancels nothing.
+    - Queued tasks are then closed.
+    - Running ones stop at their next checkpoint or at the commit guard.
+  - **Commit guard.** Every designer AI commit re-checks, under the same lock and immediately before inserting, that its run is not cancel-requested and that the task still holds its lease. A restore therefore always wins:
+    - an AI commit after it is refused (`TaskAbortedError("cancelled")`);
+    - AI revisions of the cancelled turn that landed before it are superseded instead of turning the restore into a 409.
+  - **Retries.** `revision_conflict` stays retryable, but the worker never retries a cancel-requested run, whatever the error.
 - **Error codes** add `revision_conflict` to the M2 set.
 
 ## Tool gate (`src/ai/tools.ts`)

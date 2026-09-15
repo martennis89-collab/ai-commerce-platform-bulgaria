@@ -1,7 +1,11 @@
 # M3 — Contextual AI store designer — STATE
 
 ## Status
-**IMPLEMENTED, TESTS PASS, DRAFT PR (2026-09-15).** M3-T01–T15 and T17 pass. M3-T16 (live designer smoke) is pending until the Anthropic key is rotated or the user waives it. Do not merge, tag or start M4. The user approved `DESIGN.md` and started implementation. `DESIGN.md` is canonical for M3 UI and schema choices. Model `claude-opus-5`, reasoning `high`.
+**REVIEW REJECTED AT `d70fea8`; REMEDIATED, TESTS PASS, DRAFT PR (2026-09-15).**
+- **Review findings.** Findings 1–4 are fixed; see "Remediation of the independent review".
+- **Test status.** M3-T01–T14 and T17 pass. M3-T15 passes with recorded gaps.
+- **M3-T16 pending.** The owner has not rotated the Anthropic key.
+- **Next gate.** A fresh independent re-review is required. Do not merge, tag or start M4. The user approved `DESIGN.md` and started implementation. `DESIGN.md` is canonical for M3 UI and schema choices. Model `claude-opus-5`, reasoning `high`.
 
 ## Implementation plan (phases, checkpoint-committed on this branch)
 1. **Schema and renderer.**
@@ -99,6 +103,80 @@
 - **Remaining:**
   - Independent review of PR #4, then user acceptance.
   - Live smoke M3-T16: pending until the Anthropic key is rotated, unless the user waives it. It is the only open acceptance item.
+
+## Remediation of the independent review (2026-09-15)
+The independent red-team review of PR #4 at `d70fea8` returned **REJECT**. Remediation is on this branch. PR #4 stays a draft; no merge, no tag, no M4.
+
+### Fixed findings
+1. **HIGH — stranded designer turns locked a store's designer.** Reproduced by REVIEW-A1 (deadline) and REVIEW-A2 (final-attempt lease expiry).
+   - **Settlement on every path.** `settleDesignerTurn` now settles a turn when its run is terminal or cancel-requested, not only when its task is terminal. For cancel-requested runs it closes queued, waiting, paused and lease-expired tasks. It runs from:
+     - the worker `finally`;
+     - restore/undo cancellation;
+     - `sweepExpired`, for every recomputed run;
+     - `settleStrandedDesignerTurns`, a repair sweep on every worker tick and before every new message, which also fails orphaned messages after 2 minutes.
+   - **Busy check.** It ignores messages whose run is terminal, cancel-requested or missing.
+   - **Worker.** It never retries a cancel-requested run, whatever the error, including `revision_conflict`.
+2. **MEDIUM — an AI edit could land on top of a restore (D8).** Reproduced by REVIEW-B.
+   - **Restore/undo.** They request cancellation inside their own commit, while holding the project row lock (`commitDraftRevision` `guard`). A rejected restore cancels nothing.
+   - **AI commit guard.** Designer AI commits re-check `cancel_requested_at` and their task lease under the same lock, immediately before inserting.
+   - **Restore wins either order.** When the AI commit got the lock first, restore supersedes AI revisions of the turns it cancels (`supersedeCancelledAiRevisions`) instead of returning 409. Any other stale head is still 409.
+   - **Undo** restores the parent of the revision the merchant saw, through the same path.
+3. **MEDIUM — unbounded screenshot concurrency.**
+   - **Limits.**
+     - A per-process browser cap: `STOREFRONT_SCREENSHOT_CONCURRENCY`, 1–2, default 1.
+     - One capture per store across processes: `pg_try_advisory_xact_lock`.
+     - A deadline that closes the browser: `STOREFRONT_SCREENSHOT_TIMEOUT_MS`, default 60 s.
+   - **Busy responses.** Busy requests get 429 with `reason: "busy"` instead of queueing. The slot and the lock are released in `finally` or when the transaction ends, on success, failure and timeout.
+4. **MEDIUM — M3-T15 evidence was over-claimed.** A new e2e test covers:
+   - the keyboard-only walkthrough (select, send, undo, History, restore, promote, with a focus ring at each stop);
+   - the selection ring on a dark and a saturated theme, checked by computed contrast;
+   - the failure, reconnecting, conflict, offline (input kept) and rate-limited states.
+
+   Remaining T15 gaps are recorded in TESTS.json.
+   - **Defect caught by the new test.** Hovering the selected element replaced its solid double ring with the 1px dashed hover outline: the hover rule was more specific than the selected rule, which breaks DESIGN.md §3.2. `frame.css` now applies the hover outline only to elements that are not selected.
+
+### Regression tests added
+- **`integration-tests/http/m3-review-repro.spec.ts`**, the review reproductions turned into regression tests:
+  - REVIEW-A1: deadline;
+  - REVIEW-A2: final-attempt lease;
+  - REVIEW-A3: cancelled run whose worker died with an attempt left;
+  - REVIEW-A4: revision conflict after cancellation is not retried;
+  - REVIEW-B: restore commits while the AI tool call is held after its checkpoints;
+  - REVIEW-B2: a restore supersedes an AI revision of the cancelled turn that landed first, and a later stale restore is still 409;
+  - REVIEW-S1: per-store capture lock gives 201 + 429 busy, then the lock is released;
+  - REVIEW-S2: process cap across stores gives 201 + 429 busy, and a timed-out capture releases the slot.
+- **`designer-contracts.unit.spec.ts`:** the exact 429 body now includes `reason`, and a `busy` case was added.
+- **`m3-designer-e2e.spec.ts`:** the new M3-T15 keyboard, theme ring and states test.
+
+### Verification (remediation)
+
+| Check | Result |
+|---|---|
+| Typecheck (project and tests) | Clean |
+| Unit | 13 suites, 218 tests |
+| HTTP integration | 5 suites, 98 tests: M0, M1, M2, M3 (12/12) and the review regression spec (8/8) |
+| E2E | M1 and M2 passed in the full run. M3 passed 5/5 on the final re-run. |
+| Baseline | 6/6; `baseline-observations.json` restored (only generated ids had changed) |
+| Scope | The remediation adds no catalogue, price, stock, live, checkout, billing, domain, voice or raw-HTML code |
+
+- **What changed between the full run and the M3 re-run:**
+  - `frame.css` no longer lets hover replace the selection ring;
+  - the M3 e2e spec waits for the queued turn before driving workers.
+- **UI evidence.** New evidence was inspected: `desktop-keyboard`, `ring-dark`, `ring-saturated`, and `state-failure`, `state-reconnecting`, `state-conflict`, `state-offline`, `state-rate-limited`.
+
+### Lower-risk notes still open (not changed)
+- **Undo blocked at the edit limit.** Undo/restore share `DESIGNER_MAX_EDITS_PER_HOUR` with AI edits, so a store at the limit cannot undo until the window reopens.
+- **Misleading limit copy.** `errorCopy("limit_reached")` always says "…след 60 мин", including for a turn that hit its run deadline or budget.
+- **Schema diff shows as binary.** `storefront-schema/src/index.ts` contains two literal NUL bytes in regexes, so git shows the file as binary.
+- **Revisions and screenshots.**
+  - Revision immutability is enforced in code, not by a database guard.
+  - Non-head revisions stay `draft`.
+  - Screenshots are public media, readable by anyone with the URL, the same as M2 media.
+- **Screenshot network.** Playwright route handlers see only the first URL of a redirect chain. Media passthrough relies on the backend never redirecting off-origin. WebSockets are not routed, and artifacts contain no merchant JavaScript.
+- **Open streams.** SSE designer streams have no per-user cap.
+- **Selection label on dark themes.** The label tag's background, `--amb-selection-inner`, nearly matches a dark merchant paper colour (for example `#121212`). The white label text stays readable, but the tag has no visible edge. The ring itself passes the contrast check.
+- **M1-T03c.** It could additionally assert that tampering only `project.config` never reaches a build.
+- **Independence.** The review ran in the same session that implemented M3. A fresh reviewer should do the final gate.
 
 ## Previous status
 **DESIGN.md DRAFTED, AWAITING USER APPROVAL (D16). No UI or product code yet.** Approved 2026-09-15.

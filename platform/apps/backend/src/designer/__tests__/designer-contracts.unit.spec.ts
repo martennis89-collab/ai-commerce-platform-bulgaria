@@ -259,7 +259,16 @@ describe("rate-limit responses (M3-T14)", () => {
     const res = { status: (code: number) => ((status = code), { json: (b: unknown) => (body = b) }) }
     expect(respondRateLimited(res, new RateLimitError("designer_turn", 120))).toBe(true)
     expect(status).toBe(429)
-    expect(body).toEqual({ type: "rate_limited", message: "Limit reached: designer_turn", kind: "designer_turn", retry_after_seconds: 120 })
+    expect(body).toEqual({
+      type: "rate_limited",
+      message: "Limit reached: designer_turn",
+      kind: "designer_turn",
+      reason: "limit",
+      retry_after_seconds: 120,
+    })
+    // A capture already running for the store (or the process browser cap) is "busy", not a full window.
+    expect(respondRateLimited(res, new RateLimitError("screenshot", 15, "busy"))).toBe(true)
+    expect(body).toEqual({ type: "rate_limited", message: "Busy: screenshot", kind: "screenshot", reason: "busy", retry_after_seconds: 15 })
     expect(respondRateLimited(res, new Error("boom"))).toBe(false)
   })
 })

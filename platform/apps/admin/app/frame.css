@@ -7,7 +7,8 @@
   cursor: pointer;
 }
 
-.amb-frame [data-amb-element]:hover {
+/* Hover never replaces the selection ring: a selected element keeps its double ring under the pointer. */
+.amb-frame [data-amb-element]:not([data-amb-selected="true"]):hover {
   outline: 1px dashed var(--amb-selection-inner);
   outline-offset: 2px;
 }

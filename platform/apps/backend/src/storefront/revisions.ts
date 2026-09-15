@@ -171,6 +171,18 @@ export async function commitDraftRevision(
     actionKey?: string | null
     designerMessageId?: string | null
     restoredFromRevisionId?: string | null
+    /**
+     * Runs while the project row lock is held, before the parent check. Designer AI commits use it to
+     * re-check cancellation and their lease; restore/undo use it to cancel in-flight turns in the same
+     * transaction, so the two always serialise on the lock.
+     */
+    guard?: (trx: any) => Promise<void>
+    /**
+     * Restore/undo only: the head may have moved past the expected parent solely through AI revisions of
+     * designer turns that are cancel-requested (by `guard`, in this transaction). Those revisions are
+     * superseded by the restore instead of rejecting it, so a restore always wins against a cancelled turn.
+     */
+    supersedeCancelledAiRevisions?: boolean
   }
 ): Promise<RevisionRow> {
   const config = parseStorefrontConfig(input.config)
@@ -193,11 +205,46 @@ export async function commitDraftRevision(
     if (project.status !== "active") {
       throw notFound("storefront project")
     }
+    await input.guard?.(trx)
+    let parentRevisionId = input.parentRevisionId
     if (project.head_revision_id !== input.parentRevisionId) {
-      throw new RevisionConflictError()
+      if (!input.supersedeCancelledAiRevisions || !(await onlyCancelledAiRevisionsAfter(trx, project.id, input.parentRevisionId))) {
+        throw new RevisionConflictError()
+      }
+      parentRevisionId = project.head_revision_id
     }
-    return insertRevision(trx, project, { ...input, config })
+    return insertRevision(trx, project, {
+      parentRevisionId,
+      config,
+      author: input.author,
+      summary: input.summary,
+      actionKey: input.actionKey,
+      designerMessageId: input.designerMessageId,
+      restoredFromRevisionId: input.restoredFromRevisionId,
+    })
   })
+}
+
+/** True when every revision after `parentRevisionId` was written by a designer turn whose run is cancel-requested. */
+async function onlyCancelledAiRevisionsAfter(trx: any, projectId: string, parentRevisionId: string) {
+  const [parent] = await rows(
+    trx,
+    `SELECT sequence FROM storefront_revision WHERE id = ? AND project_id = ? AND deleted_at IS NULL`,
+    [parentRevisionId, projectId]
+  )
+  if (!parent) {
+    return false
+  }
+  const later = await rows(
+    trx,
+    `SELECT r.author_type, run.cancel_requested_at
+       FROM storefront_revision r
+       LEFT JOIN ai_designer_message m ON m.id = r.designer_message_id AND m.store_environment_id = r.store_environment_id
+       LEFT JOIN ai_run run ON run.id = m.run_id AND run.store_environment_id = r.store_environment_id
+      WHERE r.project_id = ? AND r.sequence > ? AND r.deleted_at IS NULL`,
+    [projectId, parent.sequence]
+  )
+  return later.length > 0 && later.every((r) => r.author_type === "ai" && r.cancel_requested_at)
 }
 
 /** One revision of the caller's own project, or NOT_FOUND. */

@@ -26,6 +26,7 @@ import { TENANCY_MODULE } from "../../src/modules/tenancy"
 import { registerPlatformOperator } from "../../src/tenancy/provisioning"
 import { createPreviewGateway, resolvePreviewRoute } from "../../src/storefront/deploy/gateway"
 import { drainDeployments } from "../../src/storefront/deployments"
+import { commitDraftRevision, ensureHeadRevision } from "../../src/storefront/revisions"
 import { resetFakeModel, setFakeOverride } from "../../src/ai/model/fake"
 import { drainTasks, sweepExpired } from "../../src/ai/worker"
 import { sqlRows } from "../../src/ai/sql"
@@ -40,6 +41,23 @@ const PASSWORD = "M0-test-password!"
 const EVIDENCE_DIR = process.env.M3_UI_EVIDENCE_DIR || path.join(os.tmpdir(), "m3-ui-evidence")
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)])
 const ENGLISH_UI = /\b(Send|Undo|History|Loading|Preview|Error|Submit|Cancel|Retry|Settings|Dashboard)\b/
+
+// WCAG contrast between two computed CSS colours ("rgb(r, g, b)").
+const rgbOf = (value: string) => (value.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number)
+const luminanceOf = ([r, g, b]: number[]) => {
+  const channel = (c: number) => {
+    const s = c / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+const contrastOf = (a: string, b: string) => {
+  const [hi, lo] = [luminanceOf(rgbOf(a)), luminanceOf(rgbOf(b))].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+// Valid storefront themes (they pass the schema's contrast rules) that stress the selection ring.
+const DARK_THEME = { paper: "#121212", ink: "#f5f5f5", muted: "#bdbdbd", accent: "#f2c94c", accent_ink: "#121212", line: "#333333" }
+const SATURATED_THEME = { paper: "#1d1aa8", ink: "#ffffff", muted: "#d9d7ff", accent: "#ffd23f", accent_ink: "#1d1aa8", line: "#3b38c4" }
 
 // The runner loads medusa-config before it applies `env`, so config-time CORS must be set up front.
 process.env.AUTH_CORS = ADMIN_ORIGIN
@@ -348,6 +366,206 @@ medusaIntegrationTestRunner({
       expect(await page.locator("body").innerText()).not.toMatch(ENGLISH_UI)
       await evidence(page, "mobile-conversation")
       await context.close()
+    })
+
+    /** The focused element of the admin page, or of the draft frame when focus is inside it. */
+    const focusedElement = async (page: any) => {
+      const describe = () => {
+        const el = document.activeElement as HTMLElement | null
+        return el
+          ? {
+              tag: el.tagName,
+              text: (el.textContent ?? "").trim(),
+              id: el.id,
+              element: el.getAttribute("data-amb-element"),
+              outline: getComputedStyle(el).outlineStyle,
+            }
+          : null
+      }
+      const top = await page.evaluate(describe)
+      if (top?.tag === "IFRAME") {
+        const frame = page.frames().find((f: any) => f.url().endsWith("/frame"))
+        return frame ? frame.evaluate(describe) : top
+      }
+      return top
+    }
+
+    /** Presses Tab until the focused element matches; every stop on the way must be reachable, the match must show a focus ring. */
+    const tabTo = async (page: any, matches: (focus: { tag: string; text: string; id: string; element: string | null }) => boolean) => {
+      for (let i = 0; i < 120; i++) {
+        await page.keyboard.press("Tab")
+        const focus = await focusedElement(page)
+        if (focus && matches(focus)) {
+          expect({ focus: focus.text || focus.element || focus.id, outline: focus.outline }).not.toMatchObject({ outline: "none" })
+          return focus
+        }
+      }
+      throw new Error("keyboard focus never reached the expected control")
+    }
+
+    /** Computed selection ring of the selected draft element and the background it sits on. */
+    const selectionRing = async (page: any) => {
+      const frame = page.frames().find((f: any) => f.url().endsWith("/frame"))
+      return frame.evaluate(() => {
+        const el = document.querySelector('[data-amb-selected="true"]') as HTMLElement | null
+        if (!el) return null
+        const style = getComputedStyle(el)
+        let node: HTMLElement | null = el
+        let background = "rgb(255, 255, 255)"
+        while (node) {
+          const colour = getComputedStyle(node).backgroundColor
+          if (colour && colour !== "rgba(0, 0, 0, 0)" && colour !== "transparent") {
+            background = colour
+            break
+          }
+          node = node.parentElement
+        }
+        return { outlineStyle: style.outlineStyle, outlineColor: style.outlineColor, boxShadow: style.boxShadow, background }
+      })
+    }
+
+    const applyTheme = async (store: Store, page: any, colors: Record<string, string>) => {
+      setFakeOverride("designer.plan", () => ({
+        reply: "Смених цветовете.",
+        operations: [{ op: "theme.update_tokens", args: { typography: null, corner: null, colors } }],
+      }))
+      const sent = await api.post(`/merchant/designer/sessions/${store.sessionId}/messages`, { content: "Сменете цветовете", element_id: null }, bearer(store.token))
+      expect(sent.status).toBe(202)
+      expect((await settleTurn(store)).status).toBe("completed")
+      const frame = page.frames().find((f: any) => f.url().endsWith("/frame"))
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(colors.paper.slice(i, i + 2), 16))
+      await frame.waitForFunction(
+        (expected: string) => {
+          const root = document.querySelector(".amb-storefront")
+          return Boolean(root) && getComputedStyle(root as Element).backgroundColor === expected
+        },
+        `rgb(${r}, ${g}, ${b})`,
+        { timeout: 30_000 }
+      )
+    }
+
+    it("M3-T15 keyboard-only walkthrough, selection ring on dark and saturated themes, and failure, rate-limited, reconnecting, conflict and offline states", async () => {
+      const maria = stores.maria
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "bg-BG" })
+      const page = await context.newPage()
+      const frame = await signIn(page, maria)
+
+      // Keyboard only (DESIGN.md §6.5): select an element, send, undo, open History, restore, promote.
+      await tabTo(page, (f) => f.element === "section:hero-1/headline")
+      await page.keyboard.press("Enter")
+      await page.getByText("Избрано: Заглавие").first().waitFor()
+      setFakeOverride("designer.plan", () => ({
+        reply: "Смених заглавието.",
+        operations: [{ op: "section.update_copy", args: { section_id: "hero-1", field: "headline", item_index: null, value: "Свещи от Пловдив" } }],
+      }))
+      await tabTo(page, (f) => f.id === "designer-composer-rail")
+      await page.keyboard.type("Сменете заглавието")
+      await page.keyboard.press("Enter")
+      // The queued turn is on screen before the workers are driven (settleTurn reads the latest assistant message).
+      await page.getByText("Работя по промяната…").waitFor()
+      await settleTurn(maria)
+      await page.getByText("Готово: Промених заглавието в „Начален блок“. Версия 2").waitFor({ timeout: 30_000 })
+      await frame.getByRole("heading", { level: 1, name: "Свещи от Пловдив" }).waitFor({ timeout: 30_000 })
+
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "Отмени")
+      await page.keyboard.press("Enter")
+      await page.getByText("Върнах предишната версия.").waitFor()
+      await frame.getByRole("heading", { level: 1, name: "Maria Candles" }).waitFor({ timeout: 30_000 })
+
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "История")
+      await page.keyboard.press("Enter")
+      const drawer = page.getByRole("region", { name: "История" })
+      await drawer.getByText("Версия 3").waitFor({ timeout: 30_000 })
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "Върни тази версия")
+      await page.keyboard.press("Enter")
+      await drawer.getByText("Ще върнем версия 2. Текущата промяна ще бъде спряна, но нищо няма да се изгуби.").waitFor()
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "Върни")
+      await page.keyboard.press("Enter")
+      await frame.getByRole("heading", { level: 1, name: "Свещи от Пловдив" }).waitFor({ timeout: 30_000 })
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "Затвори")
+      await page.keyboard.press("Enter")
+      await drawer.waitFor({ state: "detached" })
+
+      await tabTo(page, (f) => f.tag === "BUTTON" && f.text === "Обнови прегледа")
+      await page.keyboard.press("Enter")
+      await page.getByText("Подготвяме прегледа…").first().waitFor({ timeout: 30_000 })
+      const built = await waitDeployment((await latestPreview(maria)).id)
+      expect({ status: built.status, error: built.error }).toMatchObject({ status: "ready" })
+      await page.getByText("Прегледът е обновен.").first().waitFor({ timeout: 60_000 })
+      await evidence(page, "desktop-keyboard")
+
+      // Selection ring (DESIGN.md §3.2, §6.4) on a dark and a saturated merchant theme.
+      for (const [name, colors] of [
+        ["dark", DARK_THEME],
+        ["saturated", SATURATED_THEME],
+      ] as const) {
+        await applyTheme(maria, page, colors)
+        await frame.locator('[data-amb-element="section:hero-1/headline"]').click()
+        await page.getByText("Избрано: Заглавие").first().waitFor()
+        const ring = await selectionRing(page)
+        expect(ring).toBeTruthy()
+        const outer = (ring.boxShadow.match(/rgba?\([^)]*\)/) ?? [""])[0]
+        const best = Math.max(contrastOf(ring.outlineColor, ring.background), contrastOf(outer, ring.background))
+        expect({ theme: name, outline: ring.outlineStyle, visible: best >= 3 }).toEqual({ theme: name, outline: "solid", visible: true })
+        await evidence(page, `ring-${name}`)
+      }
+
+      // Failure (§3.5): an unusable model plan leaves the draft unchanged and says so.
+      setFakeOverride("designer.plan", () => ({ reply: "", operations: [] }))
+      await page.getByLabel("Съобщение").fill("Направете нещо")
+      await page.getByRole("button", { name: "Изпрати" }).click()
+      await page.getByText("Работя по промяната…").waitFor()
+      expect((await settleTurn(maria)).status).toBe("failed")
+      await page.getByText("Не можах да приложа тази промяна. Черновата е запазена.").waitFor({ timeout: 30_000 })
+      await evidence(page, "state-failure")
+      expect(await page.locator("body").innerText()).not.toMatch(ENGLISH_UI)
+      await context.close()
+
+      // A second session whose live stream cannot connect: reconnecting, conflict, offline and rate-limited states.
+      const context2 = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "bg-BG" })
+      const page2 = await context2.newPage()
+      await page2.route("**/events", (route: any) => route.abort())
+      const frame2 = await signIn(page2, maria)
+      await page2.getByText("Връзката прекъсна. Свързваме се отново…").waitFor({ timeout: 30_000 })
+      await evidence(page2, "state-reconnecting")
+
+      // Conflict: the draft changes elsewhere while this page still shows the old head.
+      const head = await ensureHeadRevision(getContainer(), maria.projectId, maria.envId)
+      const changed = JSON.parse(JSON.stringify(head.config))
+      findSection(changed, "hero")!.headline = "Променено другаде"
+      await commitDraftRevision(getContainer(), {
+        projectId: maria.projectId,
+        storeEnvironmentId: maria.envId,
+        parentRevisionId: head.id,
+        config: changed,
+        author: { type: "merchant", user_id: null },
+        summary: "Промяна от друг раздел",
+      })
+      await page2.getByRole("button", { name: "Отмени" }).first().click()
+      await page2.getByText("Черновата беше променена междувременно. Показваме последната версия.").waitFor({ timeout: 30_000 })
+      await frame2.getByRole("heading", { level: 1, name: "Променено другаде" }).waitFor({ timeout: 30_000 })
+      await evidence(page2, "state-conflict")
+
+      // Offline: sending fails safely and the typed message stays in the composer.
+      await context2.setOffline(true)
+      await page2.getByLabel("Съобщение").fill("Промяна без връзка")
+      await page2.getByRole("button", { name: "Изпрати" }).click()
+      await page2.getByText("Нещо не се получи. Черновата е запазена.").waitFor({ timeout: 30_000 })
+      expect(await page2.getByLabel("Съобщение").inputValue()).toBe("Промяна без връзка")
+      await evidence(page2, "state-offline")
+      await context2.setOffline(false)
+
+      // Rate limited: says when to try again, in minutes.
+      process.env.DESIGNER_MAX_TURNS_PER_HOUR = "1"
+      try {
+        await page2.getByRole("button", { name: "Изпрати" }).click()
+        await page2.getByText(/Направихте много промени за кратко\. Опитайте отново след \d+ мин\./).waitFor({ timeout: 30_000 })
+        await evidence(page2, "state-rate-limited")
+      } finally {
+        delete process.env.DESIGNER_MAX_TURNS_PER_HOUR
+      }
+      expect(await page2.locator("body").innerText()).not.toMatch(ENGLISH_UI)
+      await context2.close()
     })
 
     it("M3-T08 screenshots render only the store's own ready artifact and are owned media", async () => {

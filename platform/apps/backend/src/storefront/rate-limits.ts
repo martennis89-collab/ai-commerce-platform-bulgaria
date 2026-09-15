@@ -5,7 +5,9 @@
  * rows themselves, so there is no separate counter that could drift.
  *
  * The check is soft under exact concurrency (two requests at the boundary can
- * both pass); every counted action is itself bounded and audited.
+ * both pass); every counted action is itself bounded and audited. Expensive
+ * work that runs inside the request (screenshots) is additionally bounded by a
+ * concurrency cap and a per-store lock, answered as `reason: "busy"`.
  */
 import type { MedusaContainer } from "@medusajs/framework/types"
 import { ContainerRegistrationKeys, MedusaError } from "@medusajs/framework/utils"
@@ -29,15 +31,20 @@ export function rateLimitConfig(): Record<RateLimitKind, number> {
   }
 }
 
+/** "limit": the rolling window is full. "busy": the same expensive work is already running. */
+export type RateLimitReason = "limit" | "busy"
+
 export class RateLimitError extends MedusaError {
   readonly kind: RateLimitKind
   readonly retryAfterSeconds: number
+  readonly reason: RateLimitReason
 
-  constructor(kind: RateLimitKind, retryAfterSeconds: number) {
-    super(MedusaError.Types.NOT_ALLOWED, `Limit reached: ${kind}`)
+  constructor(kind: RateLimitKind, retryAfterSeconds: number, reason: RateLimitReason = "limit") {
+    super(MedusaError.Types.NOT_ALLOWED, reason === "busy" ? `Busy: ${kind}` : `Limit reached: ${kind}`)
     this.name = "RateLimitError"
     this.kind = kind
     this.retryAfterSeconds = retryAfterSeconds
+    this.reason = reason
   }
 }
 
@@ -73,6 +80,7 @@ export function respondRateLimited(res: { status: (code: number) => { json: (bod
       type: "rate_limited",
       message: e.message,
       kind: e.kind,
+      reason: e.reason ?? "limit",
       retry_after_seconds: e.retryAfterSeconds,
     })
     return true

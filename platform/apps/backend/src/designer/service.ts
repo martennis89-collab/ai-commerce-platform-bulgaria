@@ -24,7 +24,13 @@ import {
   RevisionConflictError,
 } from "../storefront/revisions"
 import { ExecutionContext, requirePermission } from "../tenancy/context"
-import { cancelDesignerTurns, DESIGNER_TURN_LIMITS } from "./turns"
+import {
+  DESIGNER_TURN_LIMITS,
+  finishDesignerCancellation,
+  ORPHAN_MESSAGE_GRACE_SECONDS,
+  requestDesignerCancellation,
+  settleStrandedDesignerTurns,
+} from "./turns"
 
 const notFound = (what: string) => new MedusaError(MedusaError.Types.NOT_FOUND, `${what} not found`)
 const invalid = (code: string) => new MedusaError(MedusaError.Types.INVALID_DATA, code)
@@ -212,6 +218,8 @@ export function merchantDesigner(ctx: ExecutionContext) {
       if (element_id !== null && !selected) {
         throw invalid("selection_not_found")
       }
+      // Settle any turn an earlier settlement missed before deciding whether the store is busy.
+      await settleStrandedDesignerTurns(container, env).catch(() => undefined)
       await assertWithinRateLimit(container, env, "designer_turn")
 
       const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
@@ -219,10 +227,18 @@ export function merchantDesigner(ctx: ExecutionContext) {
         const q = async (sql: string, b: unknown[]) => ((await trx.raw(sql, b))?.rows ?? []) as any[]
         // One unfinished turn per store: serialised so two tabs cannot start overlapping edits.
         await q(`SELECT pg_advisory_xact_lock(hashtext(?))`, [`designer_turn:${env}`])
+        // Only a live turn blocks: a message whose run is terminal, cancel-requested or gone never does.
         const [busy] = await q(
-          `SELECT id FROM ai_designer_message WHERE store_environment_id = ? AND role = 'assistant'
-             AND status IN ('queued', 'running') AND deleted_at IS NULL LIMIT 1`,
-          [env]
+          `SELECT m.id FROM ai_designer_message m
+             LEFT JOIN ai_run r ON r.id = m.run_id AND r.deleted_at IS NULL
+            WHERE m.store_environment_id = ? AND m.role = 'assistant'
+              AND m.status IN ('queued', 'running') AND m.deleted_at IS NULL
+              AND (
+                (m.run_id IS NULL AND m.created_at > now() - (? * interval '1 second'))
+                OR (r.id IS NOT NULL AND r.status NOT IN ('completed', 'failed', 'cancelled') AND r.cancel_requested_at IS NULL)
+              )
+            LIMIT 1`,
+          [env, ORPHAN_MESSAGE_GRACE_SECONDS]
         )
         if (busy) {
           throw new MedusaError(MedusaError.Types.CONFLICT, "turn_in_progress")
@@ -290,7 +306,11 @@ export function merchantDesigner(ctx: ExecutionContext) {
       return { merchant_message: safeMessage(merchant), assistant_message: safeMessage({ ...assistant }) }
     },
 
-    /** Append-only restore of an earlier revision (D8). Cancels in-flight designer turns first. */
+    /**
+     * Append-only restore of an earlier revision (D8). In-flight designer turns are cancelled inside the
+     * same project-locked commit, so the restore always wins: an AI commit after it sees the cancellation,
+     * and AI revisions of those turns that landed first are superseded. A rejected restore cancels nothing.
+     */
     async restore(revisionId: unknown, body: unknown) {
       requirePermission(ctx, "storefront:design")
       const { expected_head_revision_id } = parse(ExpectedHeadBody, body)
@@ -300,7 +320,7 @@ export function merchantDesigner(ctx: ExecutionContext) {
         throw notFound("storefront revision")
       }
       await assertWithinRateLimit(container, env, "designer_edit")
-      const cancelled = await cancelDesignerTurns(container, env)
+      let cancelled: string[] = []
       const revision = await commitDraftRevision(container, {
         projectId: project.id,
         storeEnvironmentId: env,
@@ -309,35 +329,46 @@ export function merchantDesigner(ctx: ExecutionContext) {
         author: { type: "merchant", user_id: ctx.user.id },
         summary: `Върната версия ${target.sequence}`,
         restoredFromRevisionId: target.id,
+        guard: async (trx) => {
+          cancelled = await requestDesignerCancellation(trx, env)
+        },
+        supersedeCancelledAiRevisions: true,
       })
-      return { revision: { id: revision.id, sequence: revision.sequence, summary: revision.summary }, cancelled_turns: cancelled }
+      await finishDesignerCancellation(container, cancelled)
+      return { revision: { id: revision.id, sequence: revision.sequence, summary: revision.summary }, cancelled_turns: cancelled.length }
     },
 
-    /** Undo = restore the parent of the current head. */
+    /** Undo = restore the parent of the revision the merchant is looking at, through the same locked path. */
     async undo(body: unknown) {
       requirePermission(ctx, "storefront:design")
       const { expected_head_revision_id } = parse(ExpectedHeadBody, body)
       const project = await activeProjectFor(container, env)
-      const head = await ensureHeadRevision(container, project.id, env)
-      if (head.id !== expected_head_revision_id) {
+      const expected = await getOwnedRevision(container, env, expected_head_revision_id).catch(() => null)
+      if (!expected || expected.project_id !== project.id) {
         throw new RevisionConflictError()
       }
-      if (!head.parent_revision_id) {
-        throw invalid("nothing_to_undo")
+      if (!expected.parent_revision_id) {
+        const head = await ensureHeadRevision(container, project.id, env)
+        throw head.id === expected.id ? invalid("nothing_to_undo") : new RevisionConflictError()
       }
-      const parent = await getOwnedRevision(container, env, head.parent_revision_id)
+      const parent = await getOwnedRevision(container, env, expected.parent_revision_id)
       await assertWithinRateLimit(container, env, "designer_edit")
-      const cancelled = await cancelDesignerTurns(container, env)
+      let cancelled: string[] = []
       const revision = await commitDraftRevision(container, {
         projectId: project.id,
         storeEnvironmentId: env,
-        parentRevisionId: head.id,
+        parentRevisionId: expected.id,
         config: parent.config,
         author: { type: "merchant", user_id: ctx.user.id },
-        summary: `Отменена промяна (версия ${head.sequence})`,
+        summary: `Отменена промяна (версия ${expected.sequence})`,
         restoredFromRevisionId: parent.id,
+        guard: async (trx) => {
+          cancelled = await requestDesignerCancellation(trx, env)
+        },
+        supersedeCancelledAiRevisions: true,
       })
-      return { revision: { id: revision.id, sequence: revision.sequence, summary: revision.summary }, cancelled_turns: cancelled }
+      await finishDesignerCancellation(container, cancelled)
+      return { revision: { id: revision.id, sequence: revision.sequence, summary: revision.summary }, cancelled_turns: cancelled.length }
     },
 
     /** Promotes the head (or a named revision) to a real per-project preview build (risk 1). Never live. */

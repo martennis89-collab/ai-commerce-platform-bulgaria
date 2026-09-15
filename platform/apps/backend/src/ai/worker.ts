@@ -23,7 +23,7 @@ import { merchantTextOf, recomputeRun, StartGenerationInput } from "./runs"
 import { sqlRows } from "./sql"
 import { TASK_IMPLEMENTATIONS } from "./tasks"
 import { executeAiTool } from "./tools"
-import { settleDesignerTurn } from "../designer/turns"
+import { settleDesignerTurn, settleStrandedDesignerTurns } from "../designer/turns"
 
 export type TaskRuntime = {
   ctx: ExecutionContext
@@ -157,8 +157,8 @@ function classify(error: any): { retryable: boolean; code: string } {
   if (error instanceof ModelOutputError) return { retryable: false, code: "model_output_rejected" }
   if (error instanceof ToolRejectedError) return { retryable: false, code: "policy_rejected" }
   if (error instanceof LimitReachedError || error?.name === "RateLimitError") return { retryable: false, code: "limit_reached" }
-  // The draft head moved during the task (another edit or a restore): re-read and retry. A restore also
-  // cancels designer turns, so a cancelled run is never retried into overwriting the restored draft.
+  // The draft head moved during the task (another edit): re-read and retry. executeClaimedTask never
+  // retries a cancel-requested run, so a turn cancelled by a restore cannot retry onto the restored draft.
   if (error?.name === "RevisionConflictError") return { retryable: true, code: "revision_conflict" }
   if (
     error instanceof MedusaError &&
@@ -310,7 +310,14 @@ export async function executeClaimedTask(container: MedusaContainer, task: any, 
       const { retryable, code } = classify(error)
       const message = `${code}: ${String(error?.message ?? error).slice(0, 1500)}`
       const canRetry = retryable && task.attempt < task.max_attempts
-      await finishTask(container, task, token, canRetry ? { status: "queued", error: message } : { status: "failed", error: message })
+      // A cancelled run is never retried, whatever the error (e.g. a revision conflict caused by the restore that cancelled it).
+      const [state] = canRetry ? await sqlRows(container, `SELECT cancel_requested_at FROM ai_run WHERE id = ?`, [task.run_id]) : []
+      const outcome: TaskOutcome = !canRetry
+        ? { status: "failed", error: message }
+        : state?.cancel_requested_at
+          ? { status: "cancelled" }
+          : { status: "queued", error: message }
+      await finishTask(container, task, token, outcome)
     }
   } finally {
     clearInterval(timer)
@@ -376,7 +383,10 @@ export async function sweepExpired(container: MedusaContainer) {
   )
   for (const runId of new Set([...touched, ...expiredRuns, ...healed, ...active].map((r) => r.run_id))) {
     await recomputeRun(container, runId)
+    // Designer turns mirror their run onto the assistant message; an unsettled message would block the store's designer.
+    await settleDesignerTurn(container, runId).catch(() => undefined)
   }
+  await settleStrandedDesignerTurns(container).catch(() => undefined)
 }
 
 /** Marks every older, still-active task of the same key in the run as superseded by the given tasks. */

@@ -44,7 +44,7 @@ import {
 import { ExecutionContext, Permission, requirePermission } from "../tenancy/context"
 import { findTenantSelectors, isForbiddenTenantKey } from "../tenancy/selectors"
 import { AiLimits, aiLimits } from "./config"
-import { LeaseLostError, LimitReachedError, ToolRejectedError } from "./errors"
+import { LeaseLostError, LimitReachedError, TaskAbortedError, ToolRejectedError } from "./errors"
 import { BrandProposalSchema, HomeCopySchema, OfferSuggestionSchema, priceStatedByMerchant } from "./schemas"
 import { sqlRows } from "./sql"
 
@@ -484,6 +484,23 @@ async function commitDesignerEdit(
     summary: result.summary,
     actionKey: key,
     designerMessageId: rt.designerMessageId ?? null,
+    // Under the project row lock that restore/undo also take: a turn cancelled by a restore (which requests
+    // cancellation inside its own locked commit) or a worker that lost its lease never commits an edit.
+    guard: async (trx) => {
+      const [task] = ((
+        await trx.raw(
+          `SELECT t.lease_token, t.status, r.cancel_requested_at FROM ai_task t JOIN ai_run r ON r.id = t.run_id
+            WHERE t.id = ? AND r.id = ? AND t.store_environment_id = ?`,
+          [rt.taskId, rt.runId, env]
+        )
+      )?.rows ?? []) as any[]
+      if (!task || task.lease_token !== rt.leaseToken || task.status !== "running") {
+        throw new LeaseLostError()
+      }
+      if (task.cancel_requested_at) {
+        throw new TaskAbortedError("cancelled")
+      }
+    },
   })
   return { revision_id: revision.id, sequence: revision.sequence, summary: revision.summary }
 }

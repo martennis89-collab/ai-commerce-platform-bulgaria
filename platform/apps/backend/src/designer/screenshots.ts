@@ -10,19 +10,24 @@
  * - everything else (other hosts, internal addresses, file://, data exfiltration)
  *   is aborted.
  *
+ * Captures are bounded: a small per-process browser cap, one capture per store
+ * across processes (transaction advisory lock), and a deadline that closes the
+ * browser. Busy requests are refused with 429 instead of queueing; the slot and
+ * the lock are released on success, failure and timeout.
+ *
  * The PNG is stored as a tenant-owned media file and recorded against the
  * deployment and its revision.
  */
 import fs from "fs"
 import path from "path"
 import { randomUUID } from "crypto"
-import { MedusaError, Modules } from "@medusajs/framework/utils"
+import { ContainerRegistrationKeys, MedusaError, Modules } from "@medusajs/framework/utils"
 import { z } from "zod"
 import { STOREFRONT_MODULE } from "../modules/storefront"
 import type StorefrontModuleService from "../modules/storefront/service"
 import { expectedArtifactRef, isInside } from "../storefront/deploy/gateway"
 import { localDeployRoot, storefrontBackendUrl } from "../storefront/platform-config"
-import { assertWithinRateLimit } from "../storefront/rate-limits"
+import { assertWithinRateLimit, RateLimitError } from "../storefront/rate-limits"
 import { ExecutionContext, requirePermission } from "../tenancy/context"
 
 export const VIEWPORTS = {
@@ -49,6 +54,25 @@ const CONTENT_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
   ".woff2": "font/woff2",
 }
+
+const BUSY_RETRY_SECONDS = 15
+
+function boundedIntEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]
+  const value = raw === undefined ? fallback : Number(raw)
+  return Number.isInteger(value) && value >= min && value <= max ? value : fallback
+}
+
+/** Browsers one backend process may run at once (1 or 2). */
+export const screenshotConcurrency = () => boundedIntEnv("STOREFRONT_SCREENSHOT_CONCURRENCY", 1, 1, 2)
+
+/** Deadline for one capture, after which the browser is closed. */
+export const screenshotTimeoutMs = () => boundedIntEnv("STOREFRONT_SCREENSHOT_TIMEOUT_MS", 60_000, 1, 120_000)
+
+let activeCaptures = 0
+
+/** Captures currently running in this process (for tests and diagnostics). */
+export const activeScreenshotCaptures = () => activeCaptures
 
 /** Maps a request URL path to a file inside the artifact, or null. Real-path contained. */
 export function artifactFileFor(realArtifact: string, urlPath: string): string | null {
@@ -108,6 +132,65 @@ export function decideScreenshotRequest(input: {
   return { kind: "abort" }
 }
 
+/** Renders the artifact in a network-isolated browser. The browser is always closed, at the latest at the deadline. */
+async function renderPreviewPng(input: {
+  hostname: string
+  storeEnvironmentId: string
+  realArtifact: string
+  size: { width: number; height: number }
+}): Promise<Buffer> {
+  const previewOrigin = `https://${input.hostname}`
+  const backendOrigin = new URL(storefrontBackendUrl()).origin
+  const timeoutMs = screenshotTimeoutMs()
+  // Loaded lazily: Playwright is only needed when a screenshot is requested.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { chromium } = require("playwright")
+  const browser = await chromium.launch({ timeout: timeoutMs })
+  const deadline = setTimeout(() => {
+    browser.close().catch(() => undefined)
+  }, timeoutMs)
+  try {
+    const context = await browser.newContext({
+      viewport: input.size,
+      deviceScaleFactor: 1,
+      serviceWorkers: "block",
+      locale: "bg-BG",
+    })
+    context.setDefaultTimeout(timeoutMs)
+    await context.route("**/*", async (route: any) => {
+      const request = route.request()
+      const decision = decideScreenshotRequest({
+        url: request.url(),
+        method: request.method(),
+        previewOrigin,
+        backendOrigin,
+        storeEnvironmentId: input.storeEnvironmentId,
+        realArtifact: input.realArtifact,
+      })
+      if (decision.kind === "artifact") {
+        if (!decision.file) {
+          return route.fulfill({ status: 404, contentType: "text/plain", body: "Not Found" })
+        }
+        return route.fulfill({
+          status: 200,
+          contentType: CONTENT_TYPES[path.extname(decision.file).toLowerCase()] ?? "application/octet-stream",
+          body: fs.readFileSync(decision.file),
+        })
+      }
+      if (decision.kind === "media") {
+        return route.continue()
+      }
+      return route.abort("blockedbyclient")
+    })
+    const page = await context.newPage()
+    await page.goto(`${previewOrigin}/`, { waitUntil: "load", timeout: timeoutMs })
+    return await page.screenshot({ type: "png", fullPage: false, timeout: timeoutMs })
+  } finally {
+    clearTimeout(deadline)
+    await browser.close().catch(() => undefined)
+  }
+}
+
 export async function captureScreenshot(ctx: ExecutionContext, body: unknown) {
   requirePermission(ctx, "storefront:design")
   const parsed = ScreenshotBody.safeParse(body ?? {})
@@ -132,77 +215,62 @@ export async function captureScreenshot(ctx: ExecutionContext, body: unknown) {
   }
   await assertWithinRateLimit(container, env, "screenshot")
 
-  const size = VIEWPORTS[viewport]
-  const previewOrigin = `https://${deployment.hostname}`
-  const backendOrigin = new URL(storefrontBackendUrl()).origin
-  // Loaded lazily: Playwright is only needed when a screenshot is requested.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { chromium } = require("playwright")
-  const browser = await chromium.launch()
-  let png: Buffer
-  try {
-    const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1, serviceWorkers: "block", locale: "bg-BG" })
-    await context.route("**/*", async (route: any) => {
-      const request = route.request()
-      const decision = decideScreenshotRequest({
-        url: request.url(),
-        method: request.method(),
-        previewOrigin,
-        backendOrigin,
-        storeEnvironmentId: env,
-        realArtifact,
-      })
-      if (decision.kind === "artifact") {
-        if (!decision.file) {
-          return route.fulfill({ status: 404, contentType: "text/plain", body: "Not Found" })
-        }
-        return route.fulfill({
-          status: 200,
-          contentType: CONTENT_TYPES[path.extname(decision.file).toLowerCase()] ?? "application/octet-stream",
-          body: fs.readFileSync(decision.file),
-        })
-      }
-      if (decision.kind === "media") {
-        return route.continue()
-      }
-      return route.abort("blockedbyclient")
-    })
-    const page = await context.newPage()
-    await page.goto(`${previewOrigin}/`, { waitUntil: "load", timeout: 30_000 })
-    png = await page.screenshot({ type: "png", fullPage: false })
-  } finally {
-    await browser.close()
+  // Process-wide browser cap: refuse instead of queueing requests behind running captures.
+  if (activeCaptures >= screenshotConcurrency()) {
+    throw new RateLimitError("screenshot", BUSY_RETRY_SECONDS, "busy")
   }
+  activeCaptures++
+  try {
+    const knex: any = container.resolve(ContainerRegistrationKeys.PG_CONNECTION)
+    // One capture per store across all backend processes. The transaction-level lock is released when the
+    // transaction ends, whatever happens inside it (success, failure, timeout, lost connection).
+    return await knex.transaction(async (trx: any) => {
+      const [{ locked }] = ((await trx.raw(`SELECT pg_try_advisory_xact_lock(hashtext(?)) AS locked`, [`storefront_screenshot:${env}`]))
+        ?.rows ?? [{ locked: false }]) as { locked: boolean }[]
+      if (!locked) {
+        throw new RateLimitError("screenshot", BUSY_RETRY_SECONDS, "busy")
+      }
+      const size = VIEWPORTS[viewport]
+      let png: Buffer
+      try {
+        png = await renderPreviewPng({ hostname: deployment.hostname, storeEnvironmentId: env, realArtifact, size })
+      } catch {
+        throw new MedusaError(MedusaError.Types.UNEXPECTED_STATE, "screenshot_failed")
+      }
 
-  const fileModule: any = container.resolve(Modules.FILE)
-  const file = await fileModule.createFiles({
-    filename: `${env}/screenshots/${randomUUID()}.png`,
-    mimeType: "image/png",
-    content: png.toString("base64"),
-    access: "public",
-  })
-  await ctx.scope.claim("media_file", [file.id])
-  const screenshot: any = await storefront.createStorefrontScreenshots({
-    store_environment_id: env,
-    project_id: deployment.project_id,
-    deployment_id: deployment.id,
-    revision_id: deployment.revision_id ?? null,
-    viewport,
-    width: size.width,
-    height: size.height,
-    file_id: file.id,
-    url: file.url,
-    size_bytes: png.length,
-    requested_by: ctx.user.id,
-  } as any)
-  return {
-    id: screenshot.id,
-    viewport,
-    width: size.width,
-    height: size.height,
-    url: screenshot.url,
-    deployment_id: deployment.id,
-    revision_id: screenshot.revision_id,
-    created_at: screenshot.created_at,
+      const fileModule: any = container.resolve(Modules.FILE)
+      const file = await fileModule.createFiles({
+        filename: `${env}/screenshots/${randomUUID()}.png`,
+        mimeType: "image/png",
+        content: png.toString("base64"),
+        access: "public",
+      })
+      await ctx.scope.claim("media_file", [file.id])
+      const screenshot: any = await storefront.createStorefrontScreenshots({
+        store_environment_id: env,
+        project_id: deployment.project_id,
+        deployment_id: deployment.id,
+        revision_id: deployment.revision_id ?? null,
+        viewport,
+        width: size.width,
+        height: size.height,
+        file_id: file.id,
+        url: file.url,
+        size_bytes: png.length,
+        requested_by: ctx.user.id,
+      } as any)
+      return {
+        id: screenshot.id,
+        viewport,
+        width: size.width,
+        height: size.height,
+        url: screenshot.url,
+        deployment_id: deployment.id,
+        revision_id: screenshot.revision_id,
+        created_at: screenshot.created_at,
+      }
+    })
+  } finally {
+    activeCaptures--
   }
 }
